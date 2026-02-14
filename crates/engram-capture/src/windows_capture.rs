@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 #[cfg(target_os = "windows")]
 use chrono::Utc;
+#[cfg(not(target_os = "windows"))]
 use tracing::warn;
 #[cfg(target_os = "windows")]
 use tracing::debug;

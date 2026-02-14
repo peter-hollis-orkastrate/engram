@@ -5,6 +5,7 @@
 
 #[cfg(target_os = "windows")]
 use tracing::debug;
+#[cfg(not(target_os = "windows"))]
 use tracing::warn;
 
 use engram_core::error::EngramError;
@@ -65,23 +66,6 @@ impl OcrService for WindowsOcrService {
             .await
             .map_err(|e| EngramError::Ocr(format!("OCR task panicked: {}", e)))?
     }
-}
-
-/// Parse BMP header to extract width, height, and pixel offset.
-#[cfg(target_os = "windows")]
-fn parse_bmp_header(data: &[u8]) -> Result<(u32, u32, usize), EngramError> {
-    if data.len() < 54 {
-        return Err(EngramError::Ocr("BMP data too short".into()));
-    }
-    if &data[0..2] != b"BM" {
-        return Err(EngramError::Ocr("Not a BMP file".into()));
-    }
-
-    let pixel_offset = u32::from_le_bytes([data[10], data[11], data[12], data[13]]) as usize;
-    let width = i32::from_le_bytes([data[18], data[19], data[20], data[21]]).unsigned_abs();
-    let height = i32::from_le_bytes([data[22], data[23], data[24], data[25]]).unsigned_abs();
-
-    Ok((width, height, pixel_offset))
 }
 
 #[cfg(target_os = "windows")]

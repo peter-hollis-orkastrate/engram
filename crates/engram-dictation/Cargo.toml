@@ -10,3 +10,9 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+global-hotkey = "0.6"
+windows-sys = { version = "0.52", features = [
+    "Win32_UI_Input_KeyboardAndMouse",
+] }

@@ -4,6 +4,10 @@
 //! along with configuration types, result structs, and a mock implementation
 //! for testing without loading a real Whisper model.
 
+pub mod whisper_service;
+
+pub use whisper_service::WhisperService;
+
 use std::future::Future;
 
 use engram_core::error::EngramError;

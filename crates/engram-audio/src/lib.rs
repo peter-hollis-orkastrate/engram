@@ -4,6 +4,12 @@
 //! and voice activity detection. Includes a mock implementation for testing
 //! without real audio hardware.
 
+pub mod silero_vad;
+pub mod windows_audio;
+
+pub use silero_vad::{SileroVad, SileroVadConfig};
+pub use windows_audio::{AudioBuffer, AudioConfig, WindowsAudioService};
+
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use engram_core::config::EngramConfig;
-use engram_storage::Database;
+use engram_storage::{Database, FtsSearch, QueryService};
 use engram_vector::embedding::MockEmbedding;
-use engram_vector::{EngramPipeline, VectorIndex};
+use engram_vector::{EngramPipeline, SearchEngine, VectorIndex};
 
 /// Shared application state.
 ///
@@ -25,6 +25,12 @@ pub struct AppState {
     pub database: Arc<Database>,
     /// Ingestion pipeline (embed + dedup + index).
     pub pipeline: Arc<EngramPipeline<MockEmbedding>>,
+    /// Semantic search engine (embed query + vector search).
+    pub search_engine: Arc<SearchEngine<MockEmbedding>>,
+    /// FTS5 full-text search.
+    pub fts_search: Arc<FtsSearch>,
+    /// Cross-type query service.
+    pub query_service: Arc<QueryService>,
     /// Broadcast sender for SSE events.
     pub event_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
     /// Server start time for uptime calculation.
@@ -40,11 +46,25 @@ impl AppState {
         pipeline: EngramPipeline<MockEmbedding>,
     ) -> Self {
         let (event_tx, _) = tokio::sync::broadcast::channel(256);
+        let db_arc = Arc::new(database);
+        let index_arc = Arc::new(vector_index);
+
+        // Build search engine from a clone of the index and a fresh embedder.
+        let search_engine = Arc::new(SearchEngine::new(
+            (*index_arc).clone(),
+            MockEmbedding::new(),
+        ));
+        let fts_search = Arc::new(FtsSearch::new(Arc::clone(&db_arc)));
+        let query_service = Arc::new(QueryService::new(Arc::clone(&db_arc)));
+
         Self {
             config: Arc::new(Mutex::new(config)),
-            vector_index: Arc::new(vector_index),
-            database: Arc::new(database),
+            vector_index: index_arc,
+            database: db_arc,
             pipeline: Arc::new(pipeline),
+            search_engine,
+            fts_search,
+            query_service,
             event_tx,
             start_time: Instant::now(),
         }

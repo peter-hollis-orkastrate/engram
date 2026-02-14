@@ -2,9 +2,9 @@
 //!
 //! Each handler extracts query/path parameters via axum extractors,
 //! interacts with AppState services, and returns JSON responses.
-//! Errors are returned in the consistent ApiError JSON format.
 
 use std::convert::Infallible;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
@@ -16,6 +16,10 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
+
+use engram_core::types::ContentType;
+use engram_storage::{CaptureRepository, DictationRepository};
+use engram_vector::SearchFilters;
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -51,7 +55,7 @@ pub struct DictationHistoryParams {
 // Response types
 // =============================================================================
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SearchResultResponse {
     pub id: Uuid,
     pub content_type: String,
@@ -67,7 +71,7 @@ pub struct SearchResultResponse {
     pub mode: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PaginatedResults {
     pub results: Vec<SearchResultResponse>,
     pub total: u64,
@@ -75,14 +79,14 @@ pub struct PaginatedResults {
     pub limit: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AppInfo {
     pub name: String,
     pub capture_count: u64,
     pub last_seen: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AppsResponse {
     pub apps: Vec<AppInfo>,
 }
@@ -139,22 +143,13 @@ pub struct DictationActionResult {
     pub message: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct StorageStatsResponse {
-    pub total_bytes: u64,
-    pub hot: TierStatsResponse,
-    pub warm: TierStatsResponse,
-    pub cold: TierStatsResponse,
-    pub estimated_monthly_growth_bytes: u64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TierStatsResponse {
-    pub bytes: u64,
-    pub entry_count: u64,
-    pub vector_format: String,
-    pub oldest_entry: Option<DateTime<Utc>>,
-    pub newest_entry: Option<DateTime<Utc>>,
+    pub total_captures: u64,
+    pub screen_count: u64,
+    pub audio_count: u64,
+    pub dictation_count: u64,
+    pub db_size_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -162,43 +157,24 @@ pub struct PurgeResultResponse {
     pub dry_run: bool,
     pub entries_processed: u64,
     pub bytes_reclaimed: u64,
-    pub screenshots_deleted: u64,
-    pub audio_files_deleted: u64,
-    pub vectors_quantized: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
     pub uptime_secs: u64,
-    pub components: ComponentHealth,
-    pub total_frames_indexed: u64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ComponentHealth {
-    pub screen_capture: ComponentStatus,
-    pub audio_capture: ComponentStatus,
-    pub dictation_engine: ComponentStatus,
-    pub vector_store: ComponentStatus,
-    pub sqlite: ComponentStatus,
-    pub api_server: ComponentStatus,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ComponentStatus {
-    pub status: String,
-    pub message: Option<String>,
+    pub total_captures: u64,
+    pub vector_index_size: u64,
 }
 
 // =============================================================================
 // Handler functions
 // =============================================================================
 
-/// GET /search - semantic/hybrid search.
+/// GET /search - hybrid search using FTS5 keyword + optional vector semantic.
 pub async fn search(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<PaginatedResults>, ApiError> {
     let q = params
@@ -215,35 +191,144 @@ pub async fn search(
     let offset = params.offset.unwrap_or(0);
 
     // Validate content_type if provided.
-    if let Some(ref ct) = params.content_type {
+    let ct_filter = if let Some(ref ct) = params.content_type {
         if !["all", "screen", "audio", "dictation"].contains(&ct.as_str()) {
             return Err(ApiError::BadRequest(format!(
                 "Invalid content_type '{}'. Must be one of: all, screen, audio, dictation",
                 ct
             )));
         }
+        if ct == "all" { None } else { Some(ct.as_str()) }
+    } else {
+        None
+    };
+
+    // Try vector semantic search first.
+    let filters = SearchFilters {
+        content_type: ct_filter.and_then(|ct| match ct {
+            "screen" => Some(ContentType::Screen),
+            "audio" => Some(ContentType::Audio),
+            "dictation" => Some(ContentType::Dictation),
+            _ => None,
+        }),
+        app_name: params.app.clone(),
+        start: params.start.as_deref().and_then(|s| s.parse().ok()),
+        end: params.end.as_deref().and_then(|s| s.parse().ok()),
+    };
+
+    let vector_results = state
+        .search_engine
+        .hybrid_search(&q, filters, (limit + offset) as usize)
+        .await
+        .unwrap_or_default();
+
+    if !vector_results.is_empty() {
+        // Use vector results — enrich with data from SQLite.
+        let capture_repo = CaptureRepository::new(Arc::clone(&state.database));
+        let mut results = Vec::new();
+
+        for vr in vector_results.iter().skip(offset as usize).take(limit as usize) {
+            // Try to find the full record in SQLite.
+            let text = if let Ok(Some(frame)) = capture_repo.find_by_id(vr.id) {
+                frame.text
+            } else {
+                String::new()
+            };
+
+            results.push(SearchResultResponse {
+                id: vr.id,
+                content_type: vr.content_type.clone().unwrap_or_default(),
+                timestamp: vr.timestamp.as_deref()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_default(),
+                text,
+                score: vr.score,
+                app_name: vr.app_name.clone(),
+                window_title: None,
+                monitor_id: None,
+                source_device: None,
+                duration_secs: None,
+                confidence: None,
+                mode: None,
+            });
+        }
+
+        return Ok(Json(PaginatedResults {
+            total: vector_results.len() as u64,
+            results,
+            offset,
+            limit,
+        }));
     }
 
-    // For now, return empty results as the full search pipeline integration
-    // will be wired up when all services are composed in engram-app.
+    // Fall back to FTS5 keyword search.
+    let fts_results = if let Some(ct) = ct_filter {
+        state.fts_search.search_by_type(&q, ct, limit + offset)?
+    } else {
+        state.fts_search.search(&q, limit + offset)?
+    };
+
+    let total = fts_results.len() as u64;
+    let results: Vec<SearchResultResponse> = fts_results
+        .into_iter()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .map(|fr| SearchResultResponse {
+            id: fr.id,
+            content_type: fr.content_type.clone(),
+            timestamp: fr.timestamp,
+            text: fr.text,
+            score: fr.rank,
+            app_name: Some(fr.app_name),
+            window_title: None,
+            monitor_id: None,
+            source_device: None,
+            duration_secs: None,
+            confidence: None,
+            mode: None,
+        })
+        .collect();
+
     Ok(Json(PaginatedResults {
-        results: vec![],
-        total: 0,
+        results,
+        total,
         offset,
         limit,
     }))
 }
 
-/// GET /recent - latest captures.
+/// GET /recent - latest captures from SQLite.
 pub async fn recent(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Query(params): Query<RecentParams>,
 ) -> Result<Json<PaginatedResults>, ApiError> {
     let limit = params.limit.unwrap_or(20).min(100).max(1);
+    let ct = params.content_type.as_deref();
 
+    let rows = state.query_service.recent(limit, ct).map_err(ApiError::from)?;
+
+    let results: Vec<SearchResultResponse> = rows
+        .into_iter()
+        .map(|r| SearchResultResponse {
+            id: r.id,
+            content_type: r.content_type,
+            timestamp: r.timestamp,
+            text: r.text,
+            score: 0.0,
+            app_name: if r.app_name.is_empty() { None } else { Some(r.app_name) },
+            window_title: if r.window_title.is_empty() { None } else { Some(r.window_title) },
+            monitor_id: if r.monitor_id.is_empty() { None } else { Some(r.monitor_id) },
+            source_device: if r.source_device.is_empty() { None } else { Some(r.source_device) },
+            duration_secs: if r.duration_secs == 0.0 { None } else { Some(r.duration_secs) },
+            confidence: if r.confidence == 0.0 { None } else { Some(r.confidence) },
+            mode: if r.mode.is_empty() { None } else { Some(r.mode) },
+        })
+        .collect();
+
+    let total = results.len() as u64;
     Ok(Json(PaginatedResults {
-        results: vec![],
-        total: 0,
+        results,
+        total,
         offset: 0,
         limit,
     }))
@@ -265,27 +350,47 @@ pub async fn stream(
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
-/// GET /apps - list captured app names.
+/// GET /apps - list captured app names from SQLite.
 pub async fn apps(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<Json<AppsResponse>, ApiError> {
-    // Placeholder - will query the database when wired up.
-    Ok(Json(AppsResponse { apps: vec![] }))
+    let app_summaries = state.query_service.list_apps().map_err(ApiError::from)?;
+
+    let apps = app_summaries
+        .into_iter()
+        .map(|a| AppInfo {
+            name: a.name,
+            capture_count: a.capture_count,
+            last_seen: a.last_seen,
+        })
+        .collect();
+
+    Ok(Json(AppsResponse { apps }))
 }
 
-/// GET /apps/:name/activity - app activity timeline.
+/// GET /apps/:name/activity - app activity timeline from SQLite.
 pub async fn app_activity(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<AppActivity>, ApiError> {
     if name.is_empty() {
         return Err(ApiError::BadRequest("App name must not be empty".to_string()));
     }
 
-    // Placeholder - will query the database when wired up.
+    let segments = state.query_service.app_activity(&name).map_err(ApiError::from)?;
+
+    let timeline = segments
+        .into_iter()
+        .map(|s| ActivitySegment {
+            start: s.start,
+            end: s.end,
+            capture_count: s.capture_count,
+        })
+        .collect();
+
     Ok(Json(AppActivity {
         app_name: name,
-        timeline: vec![],
+        timeline,
     }))
 }
 
@@ -294,6 +399,7 @@ pub async fn audio_status(
     State(state): State<AppState>,
 ) -> Result<Json<AudioStatusResponse>, ApiError> {
     let uptime = state.start_time.elapsed().as_secs();
+    // Audio service status will be wired when engram-audio is implemented.
     Ok(Json(AudioStatusResponse {
         active: false,
         device_name: None,
@@ -307,6 +413,7 @@ pub async fn audio_status(
 pub async fn dictation_status(
     State(_state): State<AppState>,
 ) -> Result<Json<DictationStatusResponse>, ApiError> {
+    // Dictation service status will be wired when engram-dictation is implemented.
     Ok(Json(DictationStatusResponse {
         active: false,
         mode: "type_and_store".to_string(),
@@ -315,20 +422,56 @@ pub async fn dictation_status(
     }))
 }
 
-/// GET /dictation/history - dictation history.
+/// GET /dictation/history - dictation history from SQLite.
 pub async fn dictation_history(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Query(params): Query<DictationHistoryParams>,
 ) -> Result<Json<DictationHistoryResponse>, ApiError> {
-    let _limit = params.limit.unwrap_or(20).min(100).max(1);
-    Ok(Json(DictationHistoryResponse { entries: vec![] }))
+    let limit = params.limit.unwrap_or(20).min(100).max(1);
+    let repo = DictationRepository::new(Arc::clone(&state.database));
+
+    let entries = if let Some(app) = &params.app {
+        repo.find_by_app(app, limit).map_err(ApiError::from)?
+    } else {
+        // Use the query service for recent dictations.
+        let rows = state.query_service.recent(limit, Some("dictation")).map_err(ApiError::from)?;
+        // Convert to response directly.
+        let entries: Vec<DictationEntryResponse> = rows
+            .into_iter()
+            .map(|r| DictationEntryResponse {
+                id: r.id,
+                timestamp: r.timestamp,
+                text: r.text,
+                target_app: r.app_name,
+                target_window: r.window_title,
+                duration_secs: r.duration_secs,
+                mode: r.mode,
+            })
+            .collect();
+        return Ok(Json(DictationHistoryResponse { entries }));
+    };
+
+    let entries: Vec<DictationEntryResponse> = entries
+        .into_iter()
+        .map(|e| DictationEntryResponse {
+            id: e.id,
+            timestamp: e.timestamp,
+            text: e.text,
+            target_app: e.target_app,
+            target_window: e.target_window,
+            duration_secs: e.duration_secs as f64,
+            mode: format!("{:?}", e.mode),
+        })
+        .collect();
+
+    Ok(Json(DictationHistoryResponse { entries }))
 }
 
 /// POST /dictation/start - start dictation.
 pub async fn dictation_start(
     State(_state): State<AppState>,
 ) -> Result<Json<DictationActionResult>, ApiError> {
-    // Placeholder - will wire to DictationService.
+    // Will wire to DictationService when implemented.
     Ok(Json(DictationActionResult {
         success: true,
         message: "Dictation started".to_string(),
@@ -339,41 +482,25 @@ pub async fn dictation_start(
 pub async fn dictation_stop(
     State(_state): State<AppState>,
 ) -> Result<Json<DictationActionResult>, ApiError> {
-    // Placeholder - will wire to DictationService.
+    // Will wire to DictationService when implemented.
     Ok(Json(DictationActionResult {
         success: true,
         message: "Dictation stopped, transcription processing".to_string(),
     }))
 }
 
-/// GET /storage/stats - storage statistics.
+/// GET /storage/stats - storage statistics from SQLite.
 pub async fn storage_stats(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<Json<StorageStatsResponse>, ApiError> {
+    let stats = state.query_service.stats().map_err(ApiError::from)?;
+
     Ok(Json(StorageStatsResponse {
-        total_bytes: 0,
-        hot: TierStatsResponse {
-            bytes: 0,
-            entry_count: 0,
-            vector_format: "f32".to_string(),
-            oldest_entry: None,
-            newest_entry: None,
-        },
-        warm: TierStatsResponse {
-            bytes: 0,
-            entry_count: 0,
-            vector_format: "int8".to_string(),
-            oldest_entry: None,
-            newest_entry: None,
-        },
-        cold: TierStatsResponse {
-            bytes: 0,
-            entry_count: 0,
-            vector_format: "binary".to_string(),
-            oldest_entry: None,
-            newest_entry: None,
-        },
-        estimated_monthly_growth_bytes: 0,
+        total_captures: stats.total_captures,
+        screen_count: stats.screen_count,
+        audio_count: stats.audio_count,
+        dictation_count: stats.dictation_count,
+        db_size_bytes: stats.db_size_bytes,
     }))
 }
 
@@ -393,9 +520,6 @@ pub async fn storage_purge(
         dry_run: false,
         entries_processed: (result.records_moved + result.records_deleted) as u64,
         bytes_reclaimed: result.space_reclaimed_bytes,
-        screenshots_deleted: 0,
-        audio_files_deleted: 0,
-        vectors_quantized: result.records_moved as u64,
     }))
 }
 
@@ -430,7 +554,6 @@ pub async fn update_config(
                 if let (Some(existing_obj), Some(value_obj)) =
                     (existing.as_object_mut(), value.as_object())
                 {
-                    // Merge nested objects.
                     for (k, v) in value_obj {
                         existing_obj.insert(k.clone(), v.clone());
                     }
@@ -462,39 +585,19 @@ pub async fn health(
     State(state): State<AppState>,
 ) -> Result<Json<HealthResponse>, ApiError> {
     let uptime = state.start_time.elapsed().as_secs();
-    let total_frames = state.vector_index.len() as u64;
+    let vector_size = state.vector_index.len() as u64;
+    let total_captures = state
+        .query_service
+        .stats()
+        .map(|s| s.total_captures)
+        .unwrap_or(0);
 
     Ok(Json(HealthResponse {
         status: "healthy".to_string(),
         version: "0.1.0".to_string(),
         uptime_secs: uptime,
-        components: ComponentHealth {
-            screen_capture: ComponentStatus {
-                status: "stopped".to_string(),
-                message: None,
-            },
-            audio_capture: ComponentStatus {
-                status: "stopped".to_string(),
-                message: None,
-            },
-            dictation_engine: ComponentStatus {
-                status: "stopped".to_string(),
-                message: None,
-            },
-            vector_store: ComponentStatus {
-                status: "running".to_string(),
-                message: None,
-            },
-            sqlite: ComponentStatus {
-                status: "running".to_string(),
-                message: None,
-            },
-            api_server: ComponentStatus {
-                status: "running".to_string(),
-                message: None,
-            },
-        },
-        total_frames_indexed: total_frames,
+        total_captures,
+        vector_index_size: vector_size,
     }))
 }
 
@@ -510,4 +613,326 @@ pub async fn ui() -> impl IntoResponse {
 </body>
 </html>"#,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use engram_core::config::EngramConfig;
+    use engram_core::config::SafetyConfig;
+    use engram_vector::embedding::MockEmbedding;
+    use engram_vector::{EngramPipeline, VectorIndex};
+    use engram_storage::Database;
+    use tower::ServiceExt;
+
+    fn make_state() -> AppState {
+        let config = EngramConfig::default();
+        let index = VectorIndex::new();
+        let db = Database::in_memory().unwrap();
+        let pipeline = EngramPipeline::new(
+            index.clone(),
+            MockEmbedding::new(),
+            SafetyConfig::default(),
+            0.95,
+        );
+        AppState::new(config, index, db, pipeline)
+    }
+
+    fn make_app() -> axum::Router {
+        crate::create_router(make_state())
+    }
+
+    #[tokio::test]
+    async fn test_health_endpoint() {
+        let app = make_app();
+        let resp = app
+            .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let health: HealthResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(health.status, "healthy");
+        assert_eq!(health.total_captures, 0);
+    }
+
+    #[tokio::test]
+    async fn test_search_requires_q() {
+        let app = make_app();
+        let resp = app
+            .oneshot(Request::get("/search").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_search_rejects_empty_q() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search?q=").body(Body::empty()).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_search_invalid_content_type() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search?q=test&content_type=invalid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_search_empty_db() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search?q=hello").body(Body::empty()).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let results: PaginatedResults = serde_json::from_slice(&body).unwrap();
+        assert_eq!(results.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_search_finds_fts_results() {
+        let state = make_state();
+
+        // Insert directly into SQLite to test FTS5 search.
+        state.database.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, app_name, window_title)
+                 VALUES (?1, 'screen', strftime('%s','now'), 'hello world test', 'Chrome', 'Tab')",
+                rusqlite::params![Uuid::new_v4().to_string()],
+            ).map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/search?q=hello").body(Body::empty()).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let results: PaginatedResults = serde_json::from_slice(&body).unwrap();
+        assert_eq!(results.total, 1);
+        assert_eq!(results.results[0].text, "hello world test");
+    }
+
+    #[tokio::test]
+    async fn test_recent_empty() {
+        let app = make_app();
+        let resp = app
+            .oneshot(Request::get("/recent").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let results: PaginatedResults = serde_json::from_slice(&body).unwrap();
+        assert_eq!(results.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_recent_returns_data() {
+        let state = make_state();
+        state.database.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, app_name, window_title)
+                 VALUES (?1, 'screen', strftime('%s','now'), 'recent capture', 'VSCode', 'main.rs')",
+                rusqlite::params![Uuid::new_v4().to_string()],
+            ).map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(Request::get("/recent").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let results: PaginatedResults = serde_json::from_slice(&body).unwrap();
+        assert_eq!(results.total, 1);
+        assert_eq!(results.results[0].text, "recent capture");
+    }
+
+    #[tokio::test]
+    async fn test_apps_endpoint() {
+        let state = make_state();
+        state.database.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, app_name)
+                 VALUES (?1, 'screen', strftime('%s','now'), 't', 'Chrome')",
+                rusqlite::params![Uuid::new_v4().to_string()],
+            ).map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, app_name)
+                 VALUES (?1, 'screen', strftime('%s','now'), 't', 'Chrome')",
+                rusqlite::params![Uuid::new_v4().to_string()],
+            ).map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(Request::get("/apps").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let apps_resp: AppsResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(apps_resp.apps.len(), 1);
+        assert_eq!(apps_resp.apps[0].name, "Chrome");
+        assert_eq!(apps_resp.apps[0].capture_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_app_activity_empty_name() {
+        let app = make_app();
+        // axum will match the route with an empty path segment differently,
+        // but an empty name in the handler returns 400.
+        let resp = app
+            .oneshot(
+                Request::get("/apps//activity").body(Body::empty()).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // May be 400 or 404 depending on router matching.
+        assert!(resp.status() == StatusCode::BAD_REQUEST || resp.status() == StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_storage_stats() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/storage/stats").body(Body::empty()).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let stats: StorageStatsResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(stats.total_captures, 0);
+    }
+
+    #[tokio::test]
+    async fn test_storage_purge() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge").body(Body::empty()).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_get_config() {
+        let app = make_app();
+        let resp = app
+            .oneshot(Request::get("/config").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_dictation_history_empty() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/dictation/history")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_dictation_start_stop() {
+        let app1 = make_app();
+        let resp1 = app1
+            .oneshot(
+                Request::post("/dictation/start")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp1.status(), StatusCode::OK);
+
+        let app2 = make_app();
+        let resp2 = app2
+            .oneshot(
+                Request::post("/dictation/stop")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp2.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_ui_endpoint() {
+        let app = make_app();
+        let resp = app
+            .oneshot(Request::get("/ui").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("Engram Dashboard"));
+    }
+
+    #[tokio::test]
+    async fn test_audio_status() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/audio/status").body(Body::empty()).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 }

@@ -25,6 +25,8 @@ pub struct EngramConfig {
     pub search: SearchConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
+    pub safety: SafetyConfig,
 }
 
 impl Default for EngramConfig {
@@ -37,6 +39,7 @@ impl Default for EngramConfig {
             dictation: DictationConfig::default(),
             search: SearchConfig::default(),
             storage: StorageConfig::default(),
+            safety: SafetyConfig::default(),
         }
     }
 }
@@ -336,6 +339,31 @@ impl Default for QuantizationConfig {
             hot_format: "f32".to_string(),
             warm_format: "int8".to_string(),
             cold_format: "binary".to_string(),
+        }
+    }
+}
+
+/// Safety gate configuration for PII detection and content redaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SafetyConfig {
+    /// Enable PII detection (email addresses).
+    pub pii_detection: bool,
+    /// Enable credit card number redaction.
+    pub credit_card_redaction: bool,
+    /// Enable SSN (Social Security Number) redaction.
+    pub ssn_redaction: bool,
+    /// Custom substring patterns to deny (content containing these is blocked entirely).
+    pub custom_deny_patterns: Vec<String>,
+}
+
+impl Default for SafetyConfig {
+    fn default() -> Self {
+        Self {
+            pii_detection: true,
+            credit_card_redaction: true,
+            ssn_redaction: true,
+            custom_deny_patterns: Vec::new(),
         }
     }
 }

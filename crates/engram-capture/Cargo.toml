@@ -11,5 +11,14 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

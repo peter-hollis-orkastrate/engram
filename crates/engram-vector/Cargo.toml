@@ -5,6 +5,11 @@ edition = "2021"
 
 [dependencies]
 engram-core = { path = "../engram-core" }
+engram-storage = { path = "../engram-storage" }
+ruvector-core = { version = "2.0.2", default-features = false, features = ["hnsw", "storage", "parallel"] }
+ort = { version = "2.0.0-rc.11", default-features = false, features = ["std", "ndarray", "load-dynamic"] }
+ndarray = "0.17"
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -15,3 +20,4 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = "3"

@@ -1,13 +1,18 @@
 //! Engram Capture crate - Screen capture, window detection, capture session management.
 //!
 //! Provides the CaptureService trait for screen frame capture, a MockCaptureService
-//! for testing, and a CaptureSession struct for managing capture lifecycle.
+//! for testing, a CaptureSession struct for managing capture lifecycle, and
+//! a WindowsCaptureService for real screen capture on Windows via Win32 GDI.
+
+pub mod windows_capture;
 
 use chrono::Utc;
 use uuid::Uuid;
 
 use engram_core::error::EngramError;
 use engram_core::types::{CaptureStatus, ContentType, ScreenFrame};
+
+pub use windows_capture::{CaptureConfig, WindowsCaptureService};
 
 /// Service for capturing screen frames.
 ///

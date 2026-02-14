@@ -36,6 +36,11 @@ pub fn run_migrations(conn: &Connection) -> Result<(), EngramError> {
         info!("Applied migration v1: initial_schema");
     }
 
+    if current_version < 2 {
+        apply_v2(conn)?;
+        info!("Applied migration v2: fts5_full_text_search");
+    }
+
     Ok(())
 }
 
@@ -170,6 +175,64 @@ fn apply_v1(conn: &Connection) -> Result<(), EngramError> {
     Ok(())
 }
 
+/// Version 2: FTS5 full-text search index on captures.
+///
+/// Creates an FTS5 content-sync virtual table backed by the `captures` table.
+/// Triggers keep the FTS index in sync on INSERT, UPDATE, and DELETE.
+fn apply_v2(conn: &Connection) -> Result<(), EngramError> {
+    conn.execute_batch(
+        "
+        -- FTS5 virtual table synced with captures.text content.
+        -- content='' makes it an external-content table (no duplicate storage).
+        -- We use content=captures and content_rowid=rowid for auto-sync support.
+        -- However, since captures uses TEXT primary key (not integer rowid),
+        -- we use a standalone FTS5 table with manual triggers.
+        CREATE VIRTUAL TABLE IF NOT EXISTS captures_fts USING fts5(
+            text,
+            app_name,
+            content_type,
+            content='captures',
+            content_rowid='rowid'
+        );
+
+        -- Populate FTS from existing captures data.
+        INSERT INTO captures_fts(captures_fts) VALUES('rebuild');
+
+        -- Trigger: keep FTS in sync on INSERT.
+        CREATE TRIGGER IF NOT EXISTS captures_fts_insert
+        AFTER INSERT ON captures
+        BEGIN
+            INSERT INTO captures_fts(rowid, text, app_name, content_type)
+            VALUES (NEW.rowid, NEW.text, NEW.app_name, NEW.content_type);
+        END;
+
+        -- Trigger: keep FTS in sync on DELETE.
+        CREATE TRIGGER IF NOT EXISTS captures_fts_delete
+        AFTER DELETE ON captures
+        BEGIN
+            INSERT INTO captures_fts(captures_fts, rowid, text, app_name, content_type)
+            VALUES ('delete', OLD.rowid, OLD.text, OLD.app_name, OLD.content_type);
+        END;
+
+        -- Trigger: keep FTS in sync on UPDATE.
+        CREATE TRIGGER IF NOT EXISTS captures_fts_update
+        AFTER UPDATE ON captures
+        BEGIN
+            INSERT INTO captures_fts(captures_fts, rowid, text, app_name, content_type)
+            VALUES ('delete', OLD.rowid, OLD.text, OLD.app_name, OLD.content_type);
+            INSERT INTO captures_fts(rowid, text, app_name, content_type)
+            VALUES (NEW.rowid, NEW.text, NEW.app_name, NEW.content_type);
+        END;
+
+        -- Record migration.
+        INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (2, 'fts5_full_text_search');
+        ",
+    )
+    .map_err(|e| EngramError::Storage(format!("Failed to apply migration v2: {}", e)))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,7 +256,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
     }
 
     #[test]

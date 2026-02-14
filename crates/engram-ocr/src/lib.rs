@@ -1,9 +1,14 @@
 //! Engram OCR crate - OCR engine trait and implementations.
 //!
 //! Provides the OcrService trait for text extraction from images,
-//! and a MockOcrService for testing without a real OCR engine.
+//! a MockOcrService for testing, and a WindowsOcrService that uses
+//! the `Windows.Media.Ocr` WinRT API for real OCR on Windows.
+
+pub mod windows_ocr;
 
 use engram_core::error::EngramError;
+
+pub use windows_ocr::{OcrConfig, WindowsOcrService};
 
 /// Service for extracting text from screenshot images.
 ///

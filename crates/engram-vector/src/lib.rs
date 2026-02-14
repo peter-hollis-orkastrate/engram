@@ -9,7 +9,7 @@ pub mod index;
 pub mod pipeline;
 pub mod search;
 
-pub use embedding::{EmbeddingService, MockEmbedding};
+pub use embedding::{EmbeddingService, MockEmbedding, OnnxEmbeddingService};
 pub use index::{SearchHit, VectorIndex};
 pub use pipeline::{EngramPipeline, IngestResult};
 pub use search::{SearchEngine, SearchFilters, SearchResult};

@@ -7,8 +7,10 @@
 pub mod db;
 pub mod migrations;
 pub mod repository;
+pub mod search;
 pub mod tier;
 
 pub use db::Database;
 pub use repository::{AudioRepository, CaptureRepository, DictationRepository};
+pub use search::{FtsResult, FtsSearch};
 pub use tier::{PurgeResult, TierManager};

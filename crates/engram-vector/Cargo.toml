@@ -1,0 +1,17 @@
+[package]
+name = "engram-vector"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+engram-core = { path = "../engram-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

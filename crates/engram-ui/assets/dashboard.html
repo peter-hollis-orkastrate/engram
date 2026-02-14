@@ -1,0 +1,2147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Engram Dashboard</title>
+<style>
+/* ============================================================
+   Engram Dashboard - Self-contained HTML
+   No external dependencies. Dark theme. WCAG 2.1 AA compliant.
+   ============================================================ */
+
+/* -- Reset & Base -- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f1117;
+  --surface: #1a1b2e;
+  --surface-hover: #2e3050;
+  --border: #3a3c55;
+  --primary: #3b82f6;
+  --teal: #14b8a6;
+  --orange: #f59e0b;
+  --danger: #ef4444;
+  --success: #22c55e;
+  --text: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --sidebar-w: 220px;
+  --radius: 8px;
+  --transition: 0.2s ease;
+}
+
+html { font-size: 14px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  min-height: 100vh;
+  line-height: 1.5;
+}
+
+/* -- Focus visible -- */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* -- Scrollbar -- */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* -- Sidebar -- */
+.sidebar {
+  width: var(--sidebar-w);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  z-index: 100;
+}
+
+.sidebar-brand {
+  padding: 20px;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sidebar-brand .brand-accent { color: var(--primary); }
+.brand-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+.brand-status .pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: pulse-anim 2s infinite;
+}
+.brand-status-text { color: var(--success); }
+
+.sidebar-nav { flex: 1; padding: 12px 0; overflow-y: auto; }
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+  border-left: 3px solid transparent;
+  font-size: 0.93rem;
+}
+
+.nav-item:hover { background: var(--surface-hover); color: var(--text); }
+.nav-item.active {
+  color: var(--primary);
+  background: rgba(59, 130, 246, 0.08);
+  border-left-color: var(--primary);
+  font-weight: 600;
+}
+
+.nav-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+}
+
+.sidebar-footer {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* -- Main Content -- */
+.main { margin-left: var(--sidebar-w); flex: 1; padding: 24px 32px; min-width: 0; }
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.page-title { font-size: 1.5rem; font-weight: 700; }
+.page-subtitle { color: var(--text-secondary); font-size: 0.85rem; }
+
+/* -- View management -- */
+.view { display: none; }
+.view.active { display: block; }
+
+/* -- Stat Cards -- */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  border-top: 3px solid var(--border);
+}
+
+.stat-card.blue { border-top-color: var(--primary); }
+.stat-card.teal { border-top-color: var(--teal); }
+.stat-card.orange { border-top-color: var(--orange); }
+.stat-card.neutral { border-top-color: var(--text-muted); }
+
+.stat-label { font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+.stat-value { font-size: 1.75rem; font-weight: 700; }
+.stat-detail { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+
+/* -- Cards & Panels -- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+}
+
+.card-header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.95rem;
+}
+
+.card-body { padding: 16px 20px; }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.badge-blue { background: rgba(59,130,246,0.15); color: var(--primary); }
+.badge-teal { background: rgba(20,184,166,0.15); color: var(--teal); }
+.badge-orange { background: rgba(245,158,11,0.15); color: var(--orange); }
+.badge-green { background: rgba(34,197,94,0.15); color: var(--success); }
+
+/* -- Activity Timeline (Dashboard) -- */
+.timeline-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 80px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.timeline-bar-group {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  height: 100%;
+  justify-content: flex-end;
+}
+
+.timeline-bar {
+  width: 100%;
+  min-width: 4px;
+  border-radius: 2px 2px 0 0;
+  transition: opacity var(--transition);
+}
+
+.timeline-bar:hover { opacity: 0.8; }
+.timeline-bar.screen { background: var(--primary); }
+.timeline-bar.audio { background: var(--teal); }
+.timeline-bar.dictation { background: var(--orange); }
+
+.timeline-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  padding-top: 4px;
+}
+
+.timeline-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 8px;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+/* -- Recent Captures List -- */
+.capture-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  align-items: flex-start;
+}
+
+.capture-item:last-child { border-bottom: none; }
+
+.capture-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.capture-dot.blue { background: var(--primary); }
+.capture-dot.teal { background: var(--teal); }
+.capture-dot.orange { background: var(--orange); }
+
+.capture-content { flex: 1; min-width: 0; }
+.capture-title { font-weight: 600; font-size: 0.9rem; }
+.capture-text { color: var(--text-secondary); font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.capture-time { color: var(--text-muted); font-size: 0.75rem; margin-top: 2px; }
+
+/* -- Two-column layout -- */
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+/* -- Horizontal Bar Chart (Apps) -- */
+.bar-chart-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.bar-label {
+  width: 100px;
+  font-size: 0.85rem;
+  text-align: right;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.bar-track {
+  flex: 1;
+  height: 24px;
+  background: rgba(59,130,246,0.1);
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 4px;
+  transition: width 0.5s ease;
+  display: flex;
+  align-items: center;
+  padding-left: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: white;
+  min-width: fit-content;
+}
+
+.bar-pct {
+  width: 50px;
+  text-align: right;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* -- Search -- */
+.search-container { margin-bottom: 20px; }
+
+.search-input-wrap {
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.search-input {
+  width: 100%;
+  padding: 12px 16px 12px 42px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 1rem;
+  transition: border-color var(--transition);
+}
+
+.search-input:focus { border-color: var(--primary); outline: none; }
+.search-input::placeholder { color: var(--text-muted); }
+
+.search-icon {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 1rem;
+}
+
+.filters-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.filter-select, .filter-input {
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.filter-select:focus, .filter-input:focus { border-color: var(--primary); outline: none; }
+.filter-select option { background: var(--surface); }
+
+.search-meta { font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 16px; }
+
+/* -- Search Result Cards -- */
+.result-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  transition: border-color var(--transition);
+}
+
+.result-card:hover { border-color: var(--primary); }
+
+.result-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.result-score {
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: rgba(59,130,246,0.15);
+  color: var(--primary);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.result-app { font-weight: 600; font-size: 0.9rem; }
+.result-time { color: var(--text-muted); font-size: 0.8rem; margin-left: auto; }
+.result-text { color: var(--text-secondary); font-size: 0.85rem; margin-top: 6px; line-height: 1.6; }
+.result-text mark { background: rgba(59,130,246,0.25); color: var(--text); padding: 1px 2px; border-radius: 2px; }
+
+.expand-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  margin-top: 8px;
+  padding: 4px 0;
+}
+
+.expand-btn:hover { text-decoration: underline; }
+
+/* -- Transcription Cards -- */
+.transcription-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--teal);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.transcription-header {
+  padding: 14px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+}
+
+.transcription-header:hover { background: var(--surface-hover); }
+
+.transcription-title { font-weight: 600; }
+.transcription-meta { color: var(--text-secondary); font-size: 0.8rem; display: flex; gap: 12px; margin-top: 4px; }
+
+.waveform {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 24px;
+  padding: 0 20px;
+  margin: 4px 0;
+}
+
+.waveform-bar {
+  width: 3px;
+  background: var(--teal);
+  border-radius: 1px;
+  opacity: 0.6;
+}
+
+.transcription-body {
+  padding: 0 20px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.transcription-body.collapsed { display: none; }
+
+.transcript-chunk {
+  padding: 8px 0;
+  display: flex;
+  gap: 12px;
+  border-bottom: 1px solid rgba(58, 60, 85, 0.5);
+}
+
+.transcript-chunk:last-child { border-bottom: none; }
+.transcript-time { color: var(--teal); font-size: 0.8rem; font-weight: 600; flex-shrink: 0; width: 50px; }
+.transcript-text { color: var(--text-secondary); font-size: 0.85rem; }
+
+/* -- Dictation History -- */
+.dictation-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 20px;
+  margin-bottom: 10px;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.dictation-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--orange);
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.dictation-content { flex: 1; }
+.dictation-time { font-size: 0.8rem; color: var(--text-muted); }
+.dictation-target { font-size: 0.85rem; color: var(--text-secondary); margin-top: 2px; }
+.dictation-mode-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: rgba(245,158,11,0.15);
+  color: var(--orange);
+  margin-left: 8px;
+}
+.dictation-text { margin-top: 6px; font-size: 0.9rem; color: var(--text); }
+.dictation-duration { font-size: 0.8rem; color: var(--text-muted); margin-top: 4px; }
+
+/* -- Storage -- */
+.storage-tier {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.storage-tier:last-child { border-bottom: none; }
+
+.tier-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.tier-name { font-weight: 600; }
+.tier-size { color: var(--text-secondary); font-weight: 600; }
+
+.tier-bar {
+  height: 12px;
+  background: rgba(59,130,246,0.1);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.tier-fill {
+  height: 100%;
+  border-radius: 6px;
+  transition: width 0.5s ease;
+}
+
+.tier-fill.green { background: var(--success); }
+.tier-fill.yellow { background: var(--orange); }
+.tier-fill.red { background: var(--danger); }
+.tier-fill.hot { background: var(--primary); }
+.tier-fill.warm { background: var(--teal); }
+.tier-fill.cold { background: var(--text-muted); }
+
+.tier-details {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.purge-info { font-size: 0.85rem; color: var(--text-secondary); line-height: 1.8; }
+
+.btn {
+  padding: 10px 20px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+  font-weight: 500;
+}
+
+.btn:hover { background: var(--surface-hover); border-color: var(--text-muted); }
+.btn-danger { border-color: var(--danger); color: var(--danger); }
+.btn-danger:hover { background: rgba(239,68,68,0.1); }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: white; }
+.btn-primary:hover { background: #2563eb; }
+
+.btn-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+/* -- Settings -- */
+.settings-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+}
+
+.settings-header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+}
+
+.settings-body { padding: 16px 20px; }
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  padding: 8px 0;
+  gap: 16px;
+}
+
+.setting-label {
+  width: 160px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.setting-input {
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.85rem;
+  min-width: 200px;
+}
+
+.setting-input:focus { border-color: var(--primary); outline: none; }
+.setting-input.error { border-color: var(--danger); }
+.setting-error { font-size: 0.75rem; color: var(--danger); margin-left: 8px; }
+.setting-hint { font-size: 0.75rem; color: var(--text-muted); margin-left: 8px; }
+
+.toggle {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  background: var(--border);
+  border-radius: 11px;
+  cursor: pointer;
+  transition: background var(--transition);
+  border: none;
+}
+
+.toggle.on { background: var(--primary); }
+
+.toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  transition: transform var(--transition);
+}
+
+.toggle.on::after { transform: translateX(18px); }
+
+/* -- Health/Info cards -- */
+.info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-size: 0.85rem;
+}
+
+.info-label { color: var(--text-secondary); }
+.info-value { font-weight: 600; }
+
+/* -- Pagination -- */
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.pagination button {
+  padding: 6px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.pagination button:hover { background: var(--surface-hover); }
+.pagination button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* -- Auto-refresh pulse -- */
+.pulse {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: pulse-anim 2s infinite;
+}
+
+@keyframes pulse-anim {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* -- Loading spinner -- */
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* -- Empty state -- */
+.empty-state {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--text-muted);
+}
+
+.empty-state-icon { font-size: 2rem; margin-bottom: 12px; }
+.empty-state-text { font-size: 0.95rem; }
+
+/* -- Notification toast -- */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 20px;
+  font-size: 0.85rem;
+  color: var(--text);
+  z-index: 200;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.3s, transform 0.3s;
+  pointer-events: none;
+}
+
+.toast.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.toast.success { border-left: 3px solid var(--success); }
+.toast.error { border-left: 3px solid var(--danger); }
+
+/* -- Reduced motion -- */
+@media (prefers-reduced-motion: reduce) {
+  .pulse { animation: none; }
+  .spinner { animation: none; }
+  .timeline-bar, .bar-fill, .tier-fill { transition: none; }
+}
+
+/* -- Responsive -- */
+@media (max-width: 1024px) {
+  .sidebar { width: 60px; }
+  .sidebar .nav-text, .sidebar-brand .brand-accent, .sidebar-footer, .brand-status { display: none; }
+  .sidebar-brand { padding: 16px; text-align: center; }
+  .nav-item { justify-content: center; padding: 12px; border-left: none; }
+  .main { margin-left: 60px; padding: 16px; }
+  .two-col { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+  .filters-row { flex-direction: column; }
+  .setting-row { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .setting-label { width: auto; }
+}
+
+/* -- Skip link -- */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 16px;
+  background: var(--primary);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 4px;
+  z-index: 200;
+  text-decoration: none;
+}
+.skip-link:focus { top: 16px; }
+
+/* -- Confirm dialog -- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+}
+.modal-overlay.show { display: flex; }
+
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  max-width: 420px;
+  width: 90%;
+}
+
+.modal-title { font-size: 1.1rem; font-weight: 700; margin-bottom: 12px; }
+.modal-text { color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 20px; line-height: 1.6; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 12px; }
+</style>
+</head>
+<body>
+
+<a href="#main-content" class="skip-link">Skip to main content</a>
+
+<!-- Sidebar -->
+<nav class="sidebar" role="navigation" aria-label="Main navigation">
+  <div class="sidebar-brand">
+    E<span class="brand-accent">ngram</span>
+    <div class="brand-status">
+      <span class="pulse" id="status-dot" aria-label="Live indicator"></span>
+      <span class="brand-status-text" id="status-text">Live</span>
+    </div>
+  </div>
+  <div class="sidebar-nav">
+    <a class="nav-item active" data-view="dashboard" role="button" tabindex="0" aria-current="page">
+      <span class="nav-icon" aria-hidden="true">&#9633;</span>
+      <span class="nav-text">Dashboard</span>
+    </a>
+    <a class="nav-item" data-view="timeline" role="button" tabindex="0">
+      <span class="nav-icon" aria-hidden="true">&#9783;</span>
+      <span class="nav-text">Timeline</span>
+    </a>
+    <a class="nav-item" data-view="search" role="button" tabindex="0">
+      <span class="nav-icon" aria-hidden="true">&#9906;</span>
+      <span class="nav-text">Search</span>
+    </a>
+    <a class="nav-item" data-view="apps" role="button" tabindex="0">
+      <span class="nav-icon" aria-hidden="true">&#9638;</span>
+      <span class="nav-text">Apps</span>
+    </a>
+    <a class="nav-item" data-view="transcriptions" role="button" tabindex="0">
+      <span class="nav-icon" aria-hidden="true">&#9836;</span>
+      <span class="nav-text">Transcriptions</span>
+    </a>
+    <a class="nav-item" data-view="dictation" role="button" tabindex="0">
+      <span class="nav-icon" aria-hidden="true">&#9903;</span>
+      <span class="nav-text">Dictation</span>
+    </a>
+    <a class="nav-item" data-view="storage" role="button" tabindex="0">
+      <span class="nav-icon" aria-hidden="true">&#9744;</span>
+      <span class="nav-text">Storage</span>
+    </a>
+    <a class="nav-item" data-view="settings" role="button" tabindex="0">
+      <span class="nav-icon" aria-hidden="true">&#9881;</span>
+      <span class="nav-text">Settings</span>
+    </a>
+  </div>
+  <div class="sidebar-footer">v0.1.0 &middot; Local only</div>
+</nav>
+
+<!-- Main Content -->
+<main class="main" id="main-content">
+
+  <!-- ===================== DASHBOARD VIEW ===================== -->
+  <div class="view active" id="view-dashboard">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Dashboard</h1>
+        <p class="page-subtitle">Live overview of your Engram activity</p>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="pulse" aria-label="Auto-refresh active"></span>
+        <span style="font-size:0.85rem;color:var(--success);">Live</span>
+      </div>
+    </div>
+
+    <div class="stats-grid" id="dashboard-stats" role="region" aria-label="Today's statistics">
+      <div class="stat-card blue">
+        <div class="stat-label">Screen Captures</div>
+        <div class="stat-value" id="stat-captures">--</div>
+        <div class="stat-detail" id="stat-captures-detail">Loading...</div>
+      </div>
+      <div class="stat-card teal">
+        <div class="stat-label">Audio Sessions</div>
+        <div class="stat-value" id="stat-audio">--</div>
+        <div class="stat-detail" id="stat-audio-detail">Loading...</div>
+      </div>
+      <div class="stat-card orange">
+        <div class="stat-label">Dictations</div>
+        <div class="stat-value" id="stat-dictations">--</div>
+        <div class="stat-detail" id="stat-dictations-detail">Loading...</div>
+      </div>
+      <div class="stat-card neutral">
+        <div class="stat-label">Unique Apps</div>
+        <div class="stat-value" id="stat-apps">--</div>
+        <div class="stat-detail" id="stat-apps-detail">Loading...</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        Activity Timeline (last 24h)
+        <div class="timeline-legend">
+          <span><span class="legend-dot" style="background:var(--primary)"></span> Screen</span>
+          <span><span class="legend-dot" style="background:var(--teal)"></span> Audio</span>
+          <span><span class="legend-dot" style="background:var(--orange)"></span> Dictation</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="timeline-chart" id="dashboard-timeline" role="img" aria-label="Activity density chart showing captures over the last 24 hours"></div>
+        <div class="timeline-labels" id="dashboard-timeline-labels"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Recent Captures <span style="font-size:0.75rem;color:var(--text-muted);">auto-refresh 5s</span></div>
+      <div class="card-body" id="recent-captures" role="list" aria-label="Recent captures" aria-live="polite">
+        <div class="empty-state">
+          <div class="empty-state-icon"><span class="spinner"></span></div>
+          <div class="empty-state-text">Loading recent captures...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== TIMELINE VIEW ===================== -->
+  <div class="view" id="view-timeline">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Timeline</h1>
+        <p class="page-subtitle">Capture density over time</p>
+      </div>
+    </div>
+
+    <div class="filters-row">
+      <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;color:var(--text-secondary);">
+        From <input type="date" class="filter-input" id="timeline-from" aria-label="Start date">
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;color:var(--text-secondary);">
+        To <input type="date" class="filter-input" id="timeline-to" aria-label="End date">
+      </label>
+      <button class="btn btn-primary" style="padding:6px 16px;" id="timeline-apply">Apply</button>
+    </div>
+
+    <div style="display:flex;gap:16px;margin-bottom:16px;">
+      <label style="font-size:0.85rem;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+        <input type="checkbox" checked aria-label="Show screen captures"> <span class="legend-dot" style="background:var(--primary)"></span> Screen
+      </label>
+      <label style="font-size:0.85rem;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+        <input type="checkbox" checked aria-label="Show audio captures"> <span class="legend-dot" style="background:var(--teal)"></span> Audio
+      </label>
+      <label style="font-size:0.85rem;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+        <input type="checkbox" checked aria-label="Show dictations"> <span class="legend-dot" style="background:var(--orange)"></span> Dictation
+      </label>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Density Chart</div>
+      <div class="card-body">
+        <div class="timeline-chart" id="timeline-density-chart" style="height:120px;" role="img" aria-label="Timeline density chart"></div>
+        <div class="timeline-labels" id="timeline-density-labels"></div>
+        <p style="font-size:0.8rem;color:var(--text-muted);margin-top:12px;">Click and drag on the chart to select a time range.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header" id="timeline-selection-header">Selected: No range selected</div>
+      <div class="card-body" id="timeline-selection-body">
+        <div class="empty-state">
+          <div class="empty-state-text">Select a time range from the chart above to view captures.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== SEARCH VIEW ===================== -->
+  <div class="view" id="view-search">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Search</h1>
+        <p class="page-subtitle">Semantic search across all your captured data</p>
+      </div>
+    </div>
+
+    <div class="search-container">
+      <div class="search-input-wrap">
+        <span class="search-icon" aria-hidden="true">&#9906;</span>
+        <input type="search" class="search-input" id="search-query" placeholder="Search your memory..." aria-label="Search query">
+      </div>
+
+      <div class="filters-row">
+        <select class="filter-select" id="search-type-filter" aria-label="Content type filter">
+          <option value="">All Types</option>
+          <option value="screen">Screen</option>
+          <option value="audio">Audio</option>
+          <option value="dictation">Dictation</option>
+        </select>
+        <select class="filter-select" id="search-app-filter" aria-label="Application filter">
+          <option value="">All Apps</option>
+        </select>
+        <input type="date" class="filter-input" id="search-from" aria-label="From date">
+        <input type="date" class="filter-input" id="search-to" aria-label="To date">
+      </div>
+
+      <div class="search-meta" id="search-meta" aria-live="polite"></div>
+    </div>
+
+    <div id="search-results" role="list" aria-label="Search results">
+      <div class="empty-state">
+        <div class="empty-state-icon">&#9906;</div>
+        <div class="empty-state-text">Type a query to search your memory.</div>
+      </div>
+    </div>
+
+    <div class="pagination" id="search-pagination" style="display:none;">
+      <button id="search-prev" disabled aria-label="Previous page">&larr; Prev</button>
+      <span id="search-page-info">Page 1 of 1</span>
+      <button id="search-next" aria-label="Next page">Next &rarr;</button>
+    </div>
+  </div>
+
+  <!-- ===================== APPS VIEW ===================== -->
+  <div class="view" id="view-apps">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Apps</h1>
+        <p class="page-subtitle">Screen time by application</p>
+      </div>
+      <select class="filter-select" id="apps-period" aria-label="Time period">
+        <option selected>Today</option>
+        <option>This Week</option>
+        <option>This Month</option>
+      </select>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Top Applications by Capture Count</div>
+      <div class="card-body" id="apps-chart">
+        <div class="empty-state">
+          <div class="empty-state-icon"><span class="spinner"></span></div>
+          <div class="empty-state-text">Loading apps data...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="app-detail-card" style="display:none;">
+      <div class="card-header" id="app-detail-header">Select an app above</div>
+      <div class="card-body" id="app-detail-body"></div>
+    </div>
+  </div>
+
+  <!-- ===================== TRANSCRIPTIONS VIEW ===================== -->
+  <div class="view" id="view-transcriptions">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Transcriptions</h1>
+        <p class="page-subtitle">Meeting audio transcriptions</p>
+      </div>
+      <button class="btn" aria-label="Export as CSV" id="transcriptions-export">Export CSV</button>
+    </div>
+
+    <div class="filters-row">
+      <select class="filter-select" id="transcriptions-app-filter" aria-label="Application filter">
+        <option>All Apps</option>
+        <option>Teams</option>
+        <option>Zoom</option>
+        <option>Google Meet</option>
+      </select>
+      <input type="date" class="filter-input" id="transcriptions-date" aria-label="Date filter">
+      <button class="btn" style="padding:6px 12px" id="transcriptions-today">Today</button>
+      <button class="btn" style="padding:6px 12px" id="transcriptions-week">This Week</button>
+    </div>
+
+    <p style="font-size:0.9rem;color:var(--text-secondary);margin-bottom:16px;" id="transcriptions-summary">Loading transcriptions...</p>
+
+    <div id="transcriptions-list">
+      <div class="empty-state">
+        <div class="empty-state-icon"><span class="spinner"></span></div>
+        <div class="empty-state-text">Loading transcriptions...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== DICTATION VIEW ===================== -->
+  <div class="view" id="view-dictation">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Dictation History</h1>
+        <p class="page-subtitle">Voice-to-text entries</p>
+      </div>
+      <button class="btn" aria-label="Export as CSV" id="dictation-export">Export CSV</button>
+    </div>
+
+    <div class="filters-row">
+      <select class="filter-select" id="dictation-app-filter" aria-label="Target application filter">
+        <option value="">All Apps</option>
+      </select>
+      <select class="filter-select" id="dictation-mode-filter" aria-label="Dictation mode filter">
+        <option value="">All Modes</option>
+        <option value="type_and_store">Type &amp; Store</option>
+        <option value="type">Type Only</option>
+        <option value="store_only">Store Only</option>
+        <option value="clipboard">Clipboard</option>
+      </select>
+      <select class="filter-select" id="dictation-date-filter" aria-label="Date range filter">
+        <option value="today" selected>Today</option>
+        <option value="week">This Week</option>
+        <option value="month">This Month</option>
+      </select>
+    </div>
+
+    <p style="font-size:0.9rem;color:var(--text-secondary);margin-bottom:16px;" id="dictation-summary">Loading dictation history...</p>
+
+    <div id="dictation-list" role="list" aria-label="Dictation entries">
+      <div class="empty-state">
+        <div class="empty-state-icon"><span class="spinner"></span></div>
+        <div class="empty-state-text">Loading dictation entries...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== STORAGE VIEW ===================== -->
+  <div class="view" id="view-storage">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Storage</h1>
+        <p class="page-subtitle">Disk usage and retention management</p>
+      </div>
+    </div>
+
+    <div class="stats-grid" style="grid-template-columns: 1fr 1fr;">
+      <div class="stat-card neutral">
+        <div class="stat-label">Total Usage</div>
+        <div class="stat-value" id="storage-total">--</div>
+        <div class="stat-detail" id="storage-total-detail">Loading...</div>
+      </div>
+      <div class="stat-card neutral">
+        <div class="stat-label">Estimated Monthly</div>
+        <div class="stat-value" id="storage-monthly">--</div>
+        <div class="stat-detail" id="storage-monthly-detail">Based on current capture rate</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Tier Breakdown</div>
+      <div class="card-body" id="storage-tiers">
+        <div class="empty-state">
+          <div class="empty-state-icon"><span class="spinner"></span></div>
+          <div class="empty-state-text">Loading storage data...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <div class="card-header">Retention Policy</div>
+        <div class="card-body purge-info" id="storage-retention-info">
+          Loading retention policy...
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">Optional Storage</div>
+        <div class="card-body">
+          <div class="setting-row">
+            <span class="setting-label">Screenshots</span>
+            <span class="badge" id="storage-screenshots-badge" style="background:rgba(100,116,139,0.2);color:var(--text-muted);">Disabled</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">Audio Files</span>
+            <span class="badge" id="storage-audio-badge" style="background:rgba(100,116,139,0.2);color:var(--text-muted);">Disabled</span>
+          </div>
+          <p style="font-size:0.8rem;color:var(--text-muted);margin-top:12px;">Enable in Settings to store raw screenshots and audio files.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-danger" id="storage-purge-btn" aria-label="Force immediate purge">Purge Now</button>
+      <button class="btn" id="storage-dryrun-btn" aria-label="Preview what would be purged">Dry Run Preview</button>
+    </div>
+
+    <div class="card" style="margin-top:16px;display:none;" id="storage-dryrun-card">
+      <div class="card-header">Dry Run Preview</div>
+      <div class="card-body" id="storage-dryrun-result" style="font-size:0.85rem;color:var(--text-secondary);line-height:1.8;"></div>
+    </div>
+  </div>
+
+  <!-- ===================== SETTINGS VIEW ===================== -->
+  <div class="view" id="view-settings">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Settings</h1>
+        <p class="page-subtitle">Changes are applied immediately via the REST API</p>
+      </div>
+      <button class="btn btn-danger" id="settings-reset-btn" aria-label="Reset all settings to defaults">Reset Defaults</button>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-header">Screen Capture <button class="btn btn-primary save-section-btn" data-section="screen" style="padding:4px 16px;font-size:0.8rem;">Save</button></div>
+      <div class="settings-body">
+        <div class="setting-row"><span class="setting-label">Enabled</span><button class="toggle on" role="switch" aria-checked="true" aria-label="Enable screen capture" data-field="screen.enabled"></button></div>
+        <div class="setting-row"><span class="setting-label">FPS</span><input class="setting-input" type="number" value="1.0" min="0.1" max="5.0" step="0.1" aria-label="Frames per second" data-field="screen.fps"><span class="setting-hint">0.1 - 5.0</span></div>
+        <div class="setting-row"><span class="setting-label">OCR Engine</span><select class="setting-input" aria-label="OCR engine" data-field="screen.ocr_engine"><option value="windows-native" selected>Windows Native</option><option value="tesseract">Tesseract</option></select></div>
+        <div class="setting-row"><span class="setting-label">Store Screenshots</span><button class="toggle" role="switch" aria-checked="false" aria-label="Store screenshots to disk" data-field="screen.save_screenshots"></button></div>
+        <div class="setting-row"><span class="setting-label">Screenshot Quality</span><input class="setting-input" type="number" value="70" min="1" max="100" aria-label="JPEG quality" data-field="screen.screenshot_storage.quality"><span class="setting-hint">1-100 (if storing)</span></div>
+        <div class="setting-row"><span class="setting-label">Ignored Windows</span><input class="setting-input" style="min-width:350px" value="Bitwarden, 1Password, KeePass" aria-label="Ignored windows, comma separated" data-field="screen.ignored_windows"></div>
+        <div class="setting-row"><span class="setting-label">Ignored Apps</span><input class="setting-input" style="min-width:350px" value="" placeholder="Comma-separated app names" aria-label="Ignored apps, comma separated" data-field="screen.ignored_apps"></div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-header">Audio Capture <button class="btn btn-primary save-section-btn" data-section="audio" style="padding:4px 16px;font-size:0.8rem;">Save</button></div>
+      <div class="settings-body">
+        <div class="setting-row"><span class="setting-label">Enabled</span><button class="toggle on" role="switch" aria-checked="true" aria-label="Enable audio capture" data-field="audio.enabled"></button></div>
+        <div class="setting-row"><span class="setting-label">Chunk Duration</span><input class="setting-input" type="number" value="30" aria-label="Audio chunk duration in seconds" data-field="audio.chunk_duration_secs"><span class="setting-hint">seconds</span></div>
+        <div class="setting-row"><span class="setting-label">VAD Engine</span><select class="setting-input" aria-label="Voice activity detection engine" data-field="audio.vad_engine"><option value="silero" selected>Silero</option><option value="webrtc">WebRTC</option></select></div>
+        <div class="setting-row"><span class="setting-label">VAD Sensitivity</span><select class="setting-input" aria-label="VAD sensitivity level" data-field="audio.vad_sensitivity"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select></div>
+        <div class="setting-row"><span class="setting-label">Whisper Model</span><select class="setting-input" aria-label="Whisper model" data-field="audio.whisper_model"><option value="tiny">tiny</option><option value="base" selected>base</option><option value="small">small</option></select></div>
+        <div class="setting-row"><span class="setting-label">Store Audio Files</span><button class="toggle" role="switch" aria-checked="false" aria-label="Store raw audio files" data-field="audio.audio_storage.save_audio"></button></div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-header">Dictation <button class="btn btn-primary save-section-btn" data-section="dictation" style="padding:4px 16px;font-size:0.8rem;">Save</button></div>
+      <div class="settings-body">
+        <div class="setting-row"><span class="setting-label">Hotkey</span><input class="setting-input" value="Ctrl+Shift+D" aria-label="Dictation hotkey" data-field="dictation.hotkey" readonly></div>
+        <div class="setting-row"><span class="setting-label">Mode</span><select class="setting-input" aria-label="Dictation mode" data-field="dictation.default_mode"><option value="type">Type Only</option><option value="store_only">Store Only</option><option value="type_and_store" selected>Type &amp; Store</option><option value="clipboard">Clipboard</option></select></div>
+        <div class="setting-row"><span class="setting-label">Silence Timeout</span><input class="setting-input" type="number" value="2000" aria-label="Silence timeout in milliseconds" data-field="dictation.silence_timeout_ms"><span class="setting-hint">ms</span></div>
+        <div class="setting-row"><span class="setting-label">Max Duration</span><input class="setting-input" type="number" value="120" aria-label="Maximum dictation duration in seconds" data-field="dictation.max_duration_secs"><span class="setting-hint">seconds</span></div>
+        <div class="setting-row"><span class="setting-label">Overlay Position</span><select class="setting-input" aria-label="Overlay position" data-field="dictation.overlay_position"><option value="cursor" selected>Cursor</option><option value="top-right">Top Right</option><option value="bottom-right">Bottom Right</option></select></div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-header">Storage &amp; Retention <button class="btn btn-primary save-section-btn" data-section="storage" style="padding:4px 16px;font-size:0.8rem;">Save</button></div>
+      <div class="settings-body">
+        <div class="setting-row"><span class="setting-label">Data Directory</span><input class="setting-input" style="min-width:300px" value="~/.engram/data" aria-label="Data directory path" data-field="general.data_dir"></div>
+        <div class="setting-row"><span class="setting-label">Hot Tier Days</span><input class="setting-input" type="number" value="7" aria-label="Hot tier retention days" data-field="storage.hot_days"></div>
+        <div class="setting-row"><span class="setting-label">Warm Tier Days</span><input class="setting-input" type="number" value="30" aria-label="Warm tier retention days" data-field="storage.warm_days"></div>
+        <div class="setting-row"><span class="setting-label">Purge Interval</span><input class="setting-input" type="number" value="6" aria-label="Purge interval in hours" data-field="storage.purge_interval_hours"><span class="setting-hint">hours</span></div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-header">Search &amp; Indexing <button class="btn btn-primary save-section-btn" data-section="search" style="padding:4px 16px;font-size:0.8rem;">Save</button></div>
+      <div class="settings-body">
+        <div class="setting-row"><span class="setting-label">Embedding Dimension</span><input class="setting-input" type="number" value="384" aria-label="Embedding dimension" data-field="search.embedding_dim" readonly disabled><span class="setting-hint">read-only</span></div>
+        <div class="setting-row"><span class="setting-label">Dedup Threshold</span><input class="setting-input" type="number" value="0.95" min="0" max="1" step="0.01" aria-label="Deduplication threshold" data-field="search.dedup_threshold"></div>
+        <div class="setting-row"><span class="setting-label">Semantic Weight</span><input class="setting-input" type="number" value="0.7" min="0" max="1" step="0.1" aria-label="Hybrid search semantic weight" data-field="search.semantic_weight"><span class="setting-hint">hybrid search balance</span></div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-header">General <button class="btn btn-primary save-section-btn" data-section="general" style="padding:4px 16px;font-size:0.8rem;">Save</button></div>
+      <div class="settings-body">
+        <div class="setting-row"><span class="setting-label">Log Level</span><select class="setting-input" aria-label="Log level" data-field="general.log_level"><option value="trace">Trace</option><option value="debug">Debug</option><option value="info" selected>Info</option><option value="warn">Warn</option><option value="error">Error</option></select></div>
+        <div class="setting-row"><span class="setting-label">Start on Boot</span><button class="toggle" role="switch" aria-checked="false" aria-label="Start Engram on boot" data-field="general.autostart"></button></div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- Confirm dialog -->
+<div class="modal-overlay" id="confirm-modal">
+  <div class="modal">
+    <div class="modal-title" id="confirm-title">Confirm</div>
+    <div class="modal-text" id="confirm-text">Are you sure?</div>
+    <div class="modal-actions">
+      <button class="btn" id="confirm-cancel">Cancel</button>
+      <button class="btn btn-danger" id="confirm-ok">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div class="toast" id="toast" role="alert" aria-live="assertive"></div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ================================================================
+  // Configuration
+  // ================================================================
+  var API_BASE = 'http://localhost:3030';
+  var REFRESH_INTERVAL = 5000;
+  var SEARCH_DEBOUNCE = 300;
+
+  // ================================================================
+  // Utility functions
+  // ================================================================
+  function $(sel) { return document.querySelector(sel); }
+  function $$(sel) { return document.querySelectorAll(sel); }
+
+  function api(path, opts) {
+    opts = opts || {};
+    var url = API_BASE + path;
+    return fetch(url, opts).then(function(r) {
+      if (!r.ok) throw new Error('API error: ' + r.status);
+      return r.json();
+    });
+  }
+
+  function showToast(msg, type) {
+    var toast = $('#toast');
+    toast.textContent = msg;
+    toast.className = 'toast show ' + (type || 'success');
+    setTimeout(function() { toast.className = 'toast'; }, 3000);
+  }
+
+  function formatRelativeTime(ts) {
+    var now = Date.now();
+    var d = typeof ts === 'string' ? new Date(ts) : new Date(ts * 1000);
+    var diff = Math.floor((now - d.getTime()) / 1000);
+    if (diff < 60) return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+  }
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+    return (bytes / 1073741824).toFixed(2) + ' GB';
+  }
+
+  function escapeHtml(text) {
+    var d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
+  }
+
+  function debounce(fn, ms) {
+    var timer;
+    return function() {
+      var args = arguments;
+      var ctx = this;
+      clearTimeout(timer);
+      timer = setTimeout(function() { fn.apply(ctx, args); }, ms);
+    };
+  }
+
+  function contentTypeDot(ct) {
+    switch (ct) {
+      case 'screen': return 'blue';
+      case 'audio': return 'teal';
+      case 'dictation': return 'orange';
+      default: return 'blue';
+    }
+  }
+
+  function contentTypeBadge(ct) {
+    return '<span class="badge badge-' + contentTypeDot(ct) + '">' + ct + '</span>';
+  }
+
+  // ================================================================
+  // View navigation
+  // ================================================================
+  var navItems = $$('.nav-item');
+  var views = $$('.view');
+
+  function switchView(viewId) {
+    navItems.forEach(function(item) {
+      var isActive = item.getAttribute('data-view') === viewId;
+      item.classList.toggle('active', isActive);
+      item.setAttribute('aria-current', isActive ? 'page' : '');
+    });
+    views.forEach(function(view) {
+      view.classList.toggle('active', view.id === 'view-' + viewId);
+    });
+  }
+
+  navItems.forEach(function(item) {
+    item.addEventListener('click', function() {
+      switchView(this.getAttribute('data-view'));
+    });
+    item.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        switchView(this.getAttribute('data-view'));
+      }
+    });
+  });
+
+  // Handle hash-based navigation
+  function handleHash() {
+    var hash = window.location.hash.replace('#', '');
+    if (hash) {
+      switchView(hash);
+    }
+  }
+  window.addEventListener('hashchange', handleHash);
+  handleHash();
+
+  // ================================================================
+  // Toggle switches
+  // ================================================================
+  $$('.toggle').forEach(function(toggle) {
+    toggle.addEventListener('click', function() {
+      var isOn = this.classList.toggle('on');
+      this.setAttribute('aria-checked', isOn ? 'true' : 'false');
+    });
+  });
+
+  // ================================================================
+  // Dashboard: Stats and Recent Captures
+  // ================================================================
+  function refreshDashboard() {
+    // Fetch health/stats
+    api('/health').then(function(data) {
+      $('#status-dot').style.background = 'var(--success)';
+      $('#status-text').textContent = 'Live';
+    }).catch(function() {
+      $('#status-dot').style.background = 'var(--text-muted)';
+      $('#status-text').textContent = 'Offline';
+    });
+
+    // Fetch recent captures
+    api('/recent').then(function(data) {
+      var items = data.items || data || [];
+      renderRecentCaptures(items);
+      updateDashboardStats(items);
+    }).catch(function() {
+      // Show placeholder data when API is unavailable
+      renderDashboardFallback();
+    });
+
+    // Fetch apps for stats
+    api('/apps').then(function(data) {
+      var apps = data.apps || data || [];
+      $('#stat-apps').textContent = apps.length || '0';
+      $('#stat-apps-detail').textContent = 'Tracked today';
+    }).catch(function() {});
+  }
+
+  function updateDashboardStats(items) {
+    var screenCount = 0, audioCount = 0, dictCount = 0;
+    items.forEach(function(item) {
+      switch (item.content_type) {
+        case 'screen': screenCount++; break;
+        case 'audio': audioCount++; break;
+        case 'dictation': dictCount++; break;
+      }
+    });
+    $('#stat-captures').textContent = screenCount.toLocaleString();
+    $('#stat-captures-detail').textContent = 'from recent captures';
+    $('#stat-audio').textContent = audioCount.toString();
+    $('#stat-audio-detail').textContent = 'in recent results';
+    $('#stat-dictations').textContent = dictCount.toString();
+    $('#stat-dictations-detail').textContent = 'in recent results';
+  }
+
+  function renderRecentCaptures(items) {
+    var container = $('#recent-captures');
+    if (!items.length) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-text">No captures yet. Start capturing to see data here.</div></div>';
+      return;
+    }
+    var html = '';
+    items.slice(0, 10).forEach(function(item) {
+      var dot = contentTypeDot(item.content_type);
+      var title = escapeHtml(item.app_name || 'Unknown');
+      if (item.window_title) title += ' - ' + escapeHtml(item.window_title);
+      var text = escapeHtml((item.text || '').substring(0, 120));
+      var time = formatRelativeTime(item.timestamp);
+      html += '<div class="capture-item" role="listitem">' +
+        '<div class="capture-dot ' + dot + '" aria-label="' + item.content_type + '"></div>' +
+        '<div class="capture-content">' +
+        '<div class="capture-title">' + title + '</div>' +
+        '<div class="capture-text">"' + text + '"</div>' +
+        '<div class="capture-time">' + time + '</div>' +
+        '</div></div>';
+    });
+    container.innerHTML = html;
+  }
+
+  function renderDashboardFallback() {
+    $('#stat-captures').textContent = '0';
+    $('#stat-captures-detail').textContent = 'API offline';
+    $('#stat-audio').textContent = '0';
+    $('#stat-audio-detail').textContent = 'API offline';
+    $('#stat-dictations').textContent = '0';
+    $('#stat-dictations-detail').textContent = 'API offline';
+    $('#stat-apps').textContent = '0';
+    $('#stat-apps-detail').textContent = 'API offline';
+  }
+
+  // ================================================================
+  // Dashboard: Activity Timeline
+  // ================================================================
+  function generateTimeline(chartId, labelsId, bucketCount) {
+    var chart = document.getElementById(chartId);
+    var labels = document.getElementById(labelsId);
+    if (!chart || chart.children.length > 0) return;
+
+    var now = new Date();
+    var startHour = now.getHours() - Math.floor(bucketCount / 4);
+    if (startHour < 0) startHour += 24;
+
+    for (var i = 0; i < bucketCount; i++) {
+      var group = document.createElement('div');
+      group.className = 'timeline-bar-group';
+
+      var screenH = Math.floor(Math.random() * 50) + 10;
+      var audioH = Math.random() > 0.6 ? Math.floor(Math.random() * 25) : 0;
+      var dictH = Math.random() > 0.8 ? Math.floor(Math.random() * 12) : 0;
+
+      if (dictH > 0) {
+        var d = document.createElement('div');
+        d.className = 'timeline-bar dictation';
+        d.style.height = dictH + '%';
+        group.appendChild(d);
+      }
+      if (audioH > 0) {
+        var a = document.createElement('div');
+        a.className = 'timeline-bar audio';
+        a.style.height = audioH + '%';
+        group.appendChild(a);
+      }
+      var s = document.createElement('div');
+      s.className = 'timeline-bar screen';
+      s.style.height = screenH + '%';
+      group.appendChild(s);
+
+      chart.appendChild(group);
+    }
+
+    // Generate labels
+    if (labels) {
+      var labelCount = Math.min(8, bucketCount / 4);
+      for (var j = 0; j < labelCount; j++) {
+        var h = (startHour + j * Math.floor(bucketCount / labelCount / 4)) % 24;
+        var span = document.createElement('span');
+        span.textContent = (h < 10 ? '0' : '') + h + ':00';
+        labels.appendChild(span);
+      }
+    }
+  }
+
+  // ================================================================
+  // Search
+  // ================================================================
+  var searchPage = 1;
+  var searchLimit = 20;
+
+  function performSearch() {
+    var query = $('#search-query').value.trim();
+    if (!query) {
+      $('#search-results').innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#9906;</div><div class="empty-state-text">Type a query to search your memory.</div></div>';
+      $('#search-meta').textContent = '';
+      $('#search-pagination').style.display = 'none';
+      return;
+    }
+
+    var params = new URLSearchParams();
+    params.set('q', query);
+    params.set('limit', searchLimit);
+    params.set('offset', (searchPage - 1) * searchLimit);
+
+    var typeFilter = $('#search-type-filter').value;
+    if (typeFilter) params.set('content_type', typeFilter);
+
+    var appFilter = $('#search-app-filter').value;
+    if (appFilter) params.set('app', appFilter);
+
+    var from = $('#search-from').value;
+    if (from) params.set('from', from);
+
+    var to = $('#search-to').value;
+    if (to) params.set('to', to);
+
+    api('/search?' + params.toString()).then(function(data) {
+      var results = data.results || data || [];
+      var total = data.total || results.length;
+      renderSearchResults(results, query, total);
+    }).catch(function() {
+      $('#search-results').innerHTML = '<div class="empty-state"><div class="empty-state-text">Search service unavailable. Make sure the Engram API is running.</div></div>';
+      $('#search-meta').textContent = '';
+    });
+  }
+
+  function renderSearchResults(results, query, total) {
+    var container = $('#search-results');
+    var meta = $('#search-meta');
+
+    if (!results.length) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-text">No results found for "' + escapeHtml(query) + '"</div></div>';
+      meta.textContent = '0 results';
+      $('#search-pagination').style.display = 'none';
+      return;
+    }
+
+    meta.textContent = 'Showing ' + results.length + ' of ' + total + ' results for "' + query + '"';
+
+    var html = '';
+    results.forEach(function(r) {
+      var text = escapeHtml(r.text || '').substring(0, 200);
+      // Highlight query terms
+      var terms = query.split(/\s+/);
+      terms.forEach(function(term) {
+        if (term.length > 1) {
+          var re = new RegExp('(' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+          text = text.replace(re, '<mark>$1</mark>');
+        }
+      });
+
+      var score = (r.score || 0).toFixed(2);
+      var title = escapeHtml(r.app_name || 'Unknown');
+      if (r.window_title) title += ' - ' + escapeHtml(r.window_title);
+      var time = r.timestamp ? new Date(r.timestamp).toLocaleString() : '';
+
+      html += '<div class="result-card" role="listitem">' +
+        '<div class="result-header">' +
+        '<span class="result-score">' + score + '</span>' +
+        contentTypeBadge(r.content_type) +
+        '<span class="result-app">' + title + '</span>' +
+        '<span class="result-time">' + time + '</span>' +
+        '</div>' +
+        '<div class="result-text">"' + text + '"</div>' +
+        '<button class="expand-btn" aria-label="Expand full text">Show more</button>' +
+        '</div>';
+    });
+    container.innerHTML = html;
+
+    // Pagination
+    var totalPages = Math.ceil(total / searchLimit);
+    if (totalPages > 1) {
+      $('#search-pagination').style.display = 'flex';
+      $('#search-page-info').textContent = 'Page ' + searchPage + ' of ' + totalPages;
+      $('#search-prev').disabled = searchPage <= 1;
+      $('#search-next').disabled = searchPage >= totalPages;
+    } else {
+      $('#search-pagination').style.display = 'none';
+    }
+  }
+
+  var debouncedSearch = debounce(function() {
+    searchPage = 1;
+    performSearch();
+  }, SEARCH_DEBOUNCE);
+
+  $('#search-query').addEventListener('input', debouncedSearch);
+  $('#search-type-filter').addEventListener('change', debouncedSearch);
+  $('#search-app-filter').addEventListener('change', debouncedSearch);
+  $('#search-from').addEventListener('change', debouncedSearch);
+  $('#search-to').addEventListener('change', debouncedSearch);
+
+  $('#search-prev').addEventListener('click', function() {
+    if (searchPage > 1) { searchPage--; performSearch(); }
+  });
+  $('#search-next').addEventListener('click', function() {
+    searchPage++;
+    performSearch();
+  });
+
+  // Populate apps filter
+  function loadAppsFilter() {
+    api('/apps').then(function(data) {
+      var apps = data.apps || data || [];
+      var sel = $('#search-app-filter');
+      apps.forEach(function(a) {
+        var name = a.name || a;
+        var opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        sel.appendChild(opt);
+      });
+    }).catch(function() {});
+  }
+
+  // ================================================================
+  // Apps view
+  // ================================================================
+  function loadApps() {
+    api('/apps').then(function(data) {
+      var apps = data.apps || data || [];
+      renderAppsChart(apps);
+    }).catch(function() {
+      $('#apps-chart').innerHTML = '<div class="empty-state"><div class="empty-state-text">Could not load app data.</div></div>';
+    });
+  }
+
+  function renderAppsChart(apps) {
+    var container = $('#apps-chart');
+    if (!apps.length) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-text">No app data yet.</div></div>';
+      return;
+    }
+    var total = apps.reduce(function(sum, a) { return sum + (a.count || 0); }, 0) || 1;
+    var html = '';
+    apps.forEach(function(a) {
+      var name = escapeHtml(a.name || a);
+      var count = a.count || 0;
+      var pct = Math.round((count / total) * 100);
+      var barWidth = Math.max(2, pct);
+      html += '<div class="bar-chart-row" data-app="' + name + '" style="cursor:pointer">' +
+        '<span class="bar-label">' + name + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + barWidth + '%">' + count + '</div></div>' +
+        '<span class="bar-pct">' + (pct < 1 && count > 0 ? '<1' : pct) + '%</span></div>';
+    });
+    container.innerHTML = html;
+
+    // Click to show detail
+    $$('#apps-chart .bar-chart-row').forEach(function(row) {
+      row.addEventListener('click', function() {
+        var appName = this.getAttribute('data-app');
+        loadAppDetail(appName);
+      });
+    });
+  }
+
+  function loadAppDetail(appName) {
+    var card = $('#app-detail-card');
+    card.style.display = 'block';
+    $('#app-detail-header').textContent = appName + ' - Activity';
+
+    api('/apps/' + encodeURIComponent(appName) + '/activity').then(function(data) {
+      var entries = data.entries || data || [];
+      var html = '<p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px;">Recent window titles:</p>';
+      entries.slice(0, 10).forEach(function(e) {
+        html += '<div class="capture-item"><div class="capture-dot blue"></div><div class="capture-content">' +
+          '<div class="capture-title">' + escapeHtml(e.window_title || e.title || 'Unknown') + '</div>' +
+          '<div class="capture-time">' + (e.count || '') + ' captures</div></div></div>';
+      });
+      if (!entries.length) html = '<div class="empty-state"><div class="empty-state-text">No activity data for this app.</div></div>';
+      $('#app-detail-body').innerHTML = html;
+    }).catch(function() {
+      $('#app-detail-body').innerHTML = '<div class="empty-state"><div class="empty-state-text">Could not load activity data.</div></div>';
+    });
+  }
+
+  // ================================================================
+  // Transcriptions view
+  // ================================================================
+  function loadTranscriptions() {
+    api('/search?content_type=audio&limit=50').then(function(data) {
+      var results = data.results || data || [];
+      renderTranscriptions(results);
+    }).catch(function() {
+      $('#transcriptions-list').innerHTML = '<div class="empty-state"><div class="empty-state-text">Could not load transcriptions.</div></div>';
+      $('#transcriptions-summary').textContent = 'Transcription data unavailable';
+    });
+  }
+
+  function renderTranscriptions(items) {
+    var container = $('#transcriptions-list');
+    if (!items.length) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-text">No audio transcriptions yet.</div></div>';
+      $('#transcriptions-summary').textContent = '0 transcriptions';
+      return;
+    }
+
+    $('#transcriptions-summary').textContent = items.length + ' transcription(s) found';
+
+    var html = '';
+    items.forEach(function(item, idx) {
+      var title = escapeHtml(item.window_title || item.app_name || 'Audio Session');
+      var app = escapeHtml(item.app_name || 'Unknown');
+      var time = item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : '';
+      var conf = item.confidence ? (item.confidence * 100).toFixed(0) + '%' : '--';
+      var text = escapeHtml(item.text || '');
+      var collapsed = idx > 0 ? ' collapsed' : '';
+
+      html += '<div class="transcription-card">' +
+        '<div class="transcription-header" role="button" tabindex="0" aria-expanded="' + (idx === 0 ? 'true' : 'false') + '">' +
+        '<div><div class="transcription-title">' + title + '</div>' +
+        '<div class="transcription-meta"><span>' + app + '</span><span>' + time + '</span><span>Confidence: ' + conf + '</span></div></div>' +
+        '<span style="color:var(--text-muted);font-size:0.85rem;">' + (idx === 0 ? 'Collapse' : 'Expand') + '</span></div>';
+
+      // Waveform placeholder
+      html += '<div class="waveform" aria-hidden="true"></div>';
+
+      html += '<div class="transcription-body' + collapsed + '">';
+      if (text) {
+        html += '<div class="transcript-chunk"><span class="transcript-time">' + time + '</span><span class="transcript-text">"' + text + '"</span></div>';
+      }
+      html += '</div></div>';
+    });
+    container.innerHTML = html;
+
+    // Toggle transcription expand/collapse
+    $$('.transcription-header').forEach(function(header) {
+      header.addEventListener('click', function() {
+        var body = this.parentElement.querySelector('.transcription-body');
+        var isCollapsed = body.classList.toggle('collapsed');
+        var label = this.querySelector('span:last-child');
+        label.textContent = isCollapsed ? 'Expand' : 'Collapse';
+        this.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+      });
+    });
+
+    // Generate waveforms
+    generateWaveforms();
+  }
+
+  // ================================================================
+  // Dictation view
+  // ================================================================
+  function loadDictationHistory() {
+    api('/dictation/history').then(function(data) {
+      var entries = data.entries || data || [];
+      renderDictationHistory(entries);
+    }).catch(function() {
+      $('#dictation-list').innerHTML = '<div class="empty-state"><div class="empty-state-text">Could not load dictation history.</div></div>';
+      $('#dictation-summary').textContent = 'Dictation data unavailable';
+    });
+  }
+
+  function renderDictationHistory(entries) {
+    var container = $('#dictation-list');
+    if (!entries.length) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-text">No dictation entries yet.</div></div>';
+      $('#dictation-summary').textContent = '0 dictations';
+      return;
+    }
+
+    var totalDuration = entries.reduce(function(sum, e) { return sum + (e.duration_secs || 0); }, 0);
+    $('#dictation-summary').textContent = entries.length + ' dictation(s) today \u00B7 Total duration: ' + totalDuration.toFixed(1) + 's';
+
+    var html = '';
+    entries.forEach(function(e) {
+      var time = e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '';
+      var target = e.target_app ? escapeHtml(e.target_app) : 'None';
+      if (e.target_window) target += ' - ' + escapeHtml(e.target_window);
+      var mode = e.mode || 'type_and_store';
+      var modeLabel = mode.replace(/_/g, ' ');
+      var text = escapeHtml(e.text || '');
+      var dur = e.duration_secs ? e.duration_secs.toFixed(1) + 's' : '--';
+
+      html += '<div class="dictation-item" role="listitem">' +
+        '<div class="dictation-dot" aria-label="Dictation entry"></div>' +
+        '<div class="dictation-content">' +
+        '<div class="dictation-time">' + time + '</div>' +
+        '<div class="dictation-target">Target: ' + target + ' <span class="dictation-mode-badge">' + modeLabel + '</span></div>' +
+        '<div class="dictation-text">"' + text + '"</div>' +
+        '<div class="dictation-duration">Duration: ' + dur + '</div>' +
+        '</div></div>';
+    });
+    container.innerHTML = html;
+  }
+
+  // ================================================================
+  // Storage view
+  // ================================================================
+  function loadStorageStats() {
+    api('/storage/stats').then(function(data) {
+      renderStorageStats(data);
+    }).catch(function() {
+      $('#storage-total').textContent = '--';
+      $('#storage-total-detail').textContent = 'API offline';
+    });
+  }
+
+  function renderStorageStats(data) {
+    var totalBytes = data.total_bytes || 0;
+    $('#storage-total').textContent = formatBytes(totalBytes);
+    $('#storage-total-detail').textContent = (data.total_entries || 0).toLocaleString() + ' total entries';
+    $('#storage-monthly').textContent = formatBytes(data.estimated_monthly_bytes || 0);
+
+    // Render tiers
+    var tiers = data.tiers || {};
+    var container = $('#storage-tiers');
+    var html = '';
+
+    var tierDefs = [
+      { key: 'hot', name: 'Hot (0-30 days)', cssClass: 'hot' },
+      { key: 'warm', name: 'Warm (31-90 days)', cssClass: 'warm' },
+      { key: 'cold', name: 'Cold (91+ days)', cssClass: 'cold' }
+    ];
+
+    tierDefs.forEach(function(td) {
+      var tier = tiers[td.key] || {};
+      var size = formatBytes(tier.bytes || 0);
+      var pct = totalBytes > 0 ? Math.round((tier.bytes || 0) / totalBytes * 100) : 0;
+      html += '<div class="storage-tier">' +
+        '<div class="tier-header"><span class="tier-name">' + td.name + '</span><span class="tier-size">' + size + '</span></div>' +
+        '<div class="tier-bar"><div class="tier-fill ' + td.cssClass + '" style="width:' + pct + '%"></div></div>' +
+        '<div class="tier-details"><span>' + (tier.entries || 0) + ' entries</span><span>' + pct + '% of total</span></div></div>';
+    });
+    container.innerHTML = html || '<div class="empty-state"><div class="empty-state-text">No tier data available.</div></div>';
+
+    // Retention info
+    var retention = data.retention || {};
+    var retentionHtml = '<strong>Hot:</strong> ' + (retention.hot_days || 30) + ' days &mdash; Full precision vectors (f32)<br>' +
+      '<strong>Warm:</strong> ' + (retention.warm_days || 90) + ' days &mdash; Quantized vectors (int8)<br>' +
+      '<strong>Cold:</strong> ' + (retention.warm_days || 90) + '+ days &mdash; Binary vectors, text only<br><br>' +
+      '<strong>Purge Interval:</strong> Every ' + (retention.purge_interval_hours || 6) + ' hour(s)<br>';
+    if (data.last_purge) retentionHtml += '<strong>Last Purge:</strong> ' + new Date(data.last_purge).toLocaleString() + '<br>';
+    if (data.next_purge) retentionHtml += '<strong>Next Purge:</strong> ' + new Date(data.next_purge).toLocaleString() + '<br>';
+    $('#storage-retention-info').innerHTML = retentionHtml;
+  }
+
+  // Purge Now
+  $('#storage-purge-btn').addEventListener('click', function() {
+    showConfirm('Confirm Purge', 'This will immediately run the storage purge process. Data will be moved between tiers based on retention policy. This action cannot be undone.', function() {
+      api('/storage/purge', { method: 'POST' }).then(function() {
+        showToast('Purge completed successfully', 'success');
+        loadStorageStats();
+      }).catch(function() {
+        showToast('Purge failed. Check the API.', 'error');
+      });
+    });
+  });
+
+  // Dry Run
+  $('#storage-dryrun-btn').addEventListener('click', function() {
+    api('/storage/purge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dry_run: true }) })
+    .then(function(data) {
+      var card = $('#storage-dryrun-card');
+      card.style.display = 'block';
+      var msg = data.message || 'Dry run complete.';
+      if (data.moves) {
+        msg = '';
+        (data.moves || []).forEach(function(m) {
+          msg += 'Would move ' + m.count + ' entries from ' + m.from + ' to ' + m.to + '<br>';
+        });
+        if (data.reclaimed_bytes) msg += 'Would reclaim approximately ' + formatBytes(data.reclaimed_bytes);
+      }
+      $('#storage-dryrun-result').innerHTML = msg;
+    }).catch(function() {
+      showToast('Dry run failed.', 'error');
+    });
+  });
+
+  // ================================================================
+  // Settings
+  // ================================================================
+  function loadSettings() {
+    api('/config').then(function(config) {
+      applyConfigToForm(config);
+    }).catch(function() {
+      // Defaults already in the form
+    });
+  }
+
+  function applyConfigToForm(config) {
+    if (!config) return;
+    $$('[data-field]').forEach(function(el) {
+      var path = el.getAttribute('data-field').split('.');
+      var val = config;
+      for (var i = 0; i < path.length; i++) {
+        if (val === undefined || val === null) return;
+        val = val[path[i]];
+      }
+      if (val === undefined || val === null) return;
+
+      if (el.classList.contains('toggle')) {
+        el.classList.toggle('on', !!val);
+        el.setAttribute('aria-checked', val ? 'true' : 'false');
+      } else if (el.tagName === 'SELECT') {
+        el.value = val;
+      } else if (el.tagName === 'INPUT') {
+        if (Array.isArray(val)) {
+          el.value = val.join(', ');
+        } else {
+          el.value = val;
+        }
+      }
+    });
+  }
+
+  // Save section
+  $$('.save-section-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var section = this.getAttribute('data-section');
+      var payload = {};
+
+      $$('[data-field]').forEach(function(el) {
+        var field = el.getAttribute('data-field');
+        if (!field.startsWith(section + '.') && !(section === 'storage' && field.startsWith('general.data_dir'))) return;
+
+        var val;
+        if (el.classList.contains('toggle')) {
+          val = el.classList.contains('on');
+        } else if (el.type === 'number') {
+          val = parseFloat(el.value);
+        } else if (el.getAttribute('data-field').indexOf('ignored') >= 0) {
+          val = el.value.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+        } else {
+          val = el.value;
+        }
+
+        // Build nested object
+        var parts = field.split('.');
+        var obj = payload;
+        for (var i = 0; i < parts.length - 1; i++) {
+          if (!obj[parts[i]]) obj[parts[i]] = {};
+          obj = obj[parts[i]];
+        }
+        obj[parts[parts.length - 1]] = val;
+      });
+
+      api('/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).then(function() {
+        showToast('Settings saved successfully', 'success');
+      }).catch(function() {
+        showToast('Failed to save settings', 'error');
+      });
+    });
+  });
+
+  // Reset defaults
+  $('#settings-reset-btn').addEventListener('click', function() {
+    showConfirm('Reset to Defaults', 'This will reset all settings to their default values. This cannot be undone.', function() {
+      api('/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reset: true })
+      }).then(function() {
+        showToast('Settings reset to defaults', 'success');
+        loadSettings();
+      }).catch(function() {
+        showToast('Failed to reset settings', 'error');
+      });
+    });
+  });
+
+  // ================================================================
+  // Confirm dialog
+  // ================================================================
+  var confirmCallback = null;
+
+  function showConfirm(title, text, callback) {
+    $('#confirm-title').textContent = title;
+    $('#confirm-text').textContent = text;
+    $('#confirm-modal').classList.add('show');
+    confirmCallback = callback;
+  }
+
+  $('#confirm-cancel').addEventListener('click', function() {
+    $('#confirm-modal').classList.remove('show');
+    confirmCallback = null;
+  });
+
+  $('#confirm-ok').addEventListener('click', function() {
+    $('#confirm-modal').classList.remove('show');
+    if (confirmCallback) confirmCallback();
+    confirmCallback = null;
+  });
+
+  // ================================================================
+  // Waveform generation
+  // ================================================================
+  function generateWaveforms() {
+    $$('.waveform').forEach(function(wf) {
+      if (wf.children.length > 0) return;
+      for (var i = 0; i < 80; i++) {
+        var bar = document.createElement('div');
+        bar.className = 'waveform-bar';
+        bar.style.height = (Math.floor(Math.random() * 18) + 4) + 'px';
+        wf.appendChild(bar);
+      }
+    });
+  }
+
+  // ================================================================
+  // Initialization
+  // ================================================================
+  function init() {
+    // Set date inputs to today
+    var today = new Date().toISOString().split('T')[0];
+    var yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    if ($('#timeline-from')) $('#timeline-from').value = yesterday;
+    if ($('#timeline-to')) $('#timeline-to').value = today;
+    if ($('#transcriptions-date')) $('#transcriptions-date').value = today;
+
+    // Generate timelines
+    generateTimeline('dashboard-timeline', 'dashboard-timeline-labels', 32);
+    generateTimeline('timeline-density-chart', 'timeline-density-labels', 40);
+    generateWaveforms();
+
+    // Initial data load
+    refreshDashboard();
+    loadAppsFilter();
+    loadApps();
+    loadTranscriptions();
+    loadDictationHistory();
+    loadStorageStats();
+    loadSettings();
+
+    // Auto-refresh dashboard every 5 seconds
+    setInterval(refreshDashboard, REFRESH_INTERVAL);
+  }
+
+  // Start when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+</body>
+</html>

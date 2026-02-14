@@ -1,0 +1,12 @@
+[package]
+name = "engram-dictation"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+engram-core = { path = "../engram-core" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }

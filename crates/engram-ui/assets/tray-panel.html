@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=400, initial-scale=1.0">
+<title>Engram Tray Panel</title>
+<style>
+/* ============================================================
+   Engram Tray Panel - Compact 400x500px webview
+   Self-contained. No external dependencies. Dark theme.
+   ============================================================ */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f1117;
+  --surface: #1a1b2e;
+  --surface-hover: #2e3050;
+  --border: #3a3c55;
+  --primary: #3b82f6;
+  --teal: #14b8a6;
+  --orange: #f59e0b;
+  --danger: #ef4444;
+  --success: #22c55e;
+  --text: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --radius: 6px;
+  --transition: 0.2s ease;
+}
+
+html, body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  width: 400px;
+  max-height: 500px;
+  overflow: hidden;
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* -- Header -- */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.header-brand {
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.header-brand span { color: var(--primary); }
+
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: pulse 2s infinite;
+}
+
+.status-dot.paused { background: var(--text-muted); animation: none; }
+.status-dot.dictating { background: var(--orange); }
+
+.status-label { font-weight: 500; }
+.status-label.live { color: var(--success); }
+.status-label.paused { color: var(--text-muted); }
+.status-label.dictating { color: var(--orange); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot { animation: none; }
+}
+
+/* -- Search bar -- */
+.search-bar {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.search-input {
+  width: 100%;
+  padding: 8px 12px 8px 32px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.9rem;
+  transition: border-color var(--transition);
+}
+
+.search-input:focus { border-color: var(--primary); outline: none; }
+.search-input::placeholder { color: var(--text-muted); }
+
+.search-wrap {
+  position: relative;
+}
+
+.search-wrap-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* -- Stats section -- */
+.stats-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.stats-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  font-size: 0.85rem;
+}
+
+.stat-row-label { color: var(--text-secondary); }
+.stat-row-value { font-weight: 600; }
+
+/* -- Recent items -- */
+.recent-section {
+  padding: 8px 16px;
+  flex: 1;
+  overflow-y: auto;
+  max-height: 220px;
+}
+
+.recent-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.recent-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(58, 60, 85, 0.5);
+  align-items: flex-start;
+}
+
+.recent-item:last-child { border-bottom: none; }
+
+.recent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.recent-dot.blue { background: var(--primary); }
+.recent-dot.teal { background: var(--teal); }
+.recent-dot.orange { background: var(--orange); }
+
+.recent-content { flex: 1; min-width: 0; }
+
+.recent-app {
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-text {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-time {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+/* -- Search results (replaces stats+recent when searching) -- */
+.search-results {
+  padding: 8px 16px;
+  flex: 1;
+  overflow-y: auto;
+  display: none;
+  max-height: 300px;
+}
+
+.search-results.active { display: block; }
+
+.search-results-count {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.search-result-item {
+  padding: 8px;
+  margin-bottom: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color var(--transition);
+}
+
+.search-result-item:hover { border-color: var(--primary); }
+
+.search-result-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.search-result-text {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-result-meta {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.search-help {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 12px 0;
+}
+
+/* -- Actions bar -- */
+.actions-bar {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  background: var(--surface);
+}
+
+.action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+  min-height: 36px;
+}
+
+.action-btn:hover { background: var(--surface-hover); border-color: var(--text-muted); }
+
+.action-btn.dictate {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+.action-btn.dictate:hover { background: rgba(245,158,11,0.1); }
+
+.action-btn .btn-icon { font-size: 0.9rem; }
+
+/* -- Empty state -- */
+.empty-text {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  padding: 20px 0;
+}
+
+/* -- Panel layout -- */
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 500px;
+  width: 400px;
+}
+
+.panel-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+</style>
+</head>
+<body>
+
+<div class="panel">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-brand">E<span>ngram</span></div>
+    <div class="header-status">
+      <div class="status-dot" id="tray-status-dot" aria-label="Status indicator"></div>
+      <span class="status-label live" id="tray-status-label">Live</span>
+    </div>
+  </div>
+
+  <!-- Search -->
+  <div class="search-bar">
+    <div class="search-wrap">
+      <span class="search-wrap-icon" aria-hidden="true">&#9906;</span>
+      <input type="search" class="search-input" id="tray-search" placeholder="Search your memory..." aria-label="Quick search">
+    </div>
+  </div>
+
+  <!-- Panel body (stats + recent OR search results) -->
+  <div class="panel-body">
+
+    <!-- Stats -->
+    <div class="stats-section" id="tray-stats-section">
+      <div class="stats-title">Today</div>
+      <div class="stat-row">
+        <span class="stat-row-label">Screen captures</span>
+        <span class="stat-row-value" id="tray-stat-captures">--</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-row-label">Audio sessions</span>
+        <span class="stat-row-value" id="tray-stat-audio">--</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-row-label">Dictations</span>
+        <span class="stat-row-value" id="tray-stat-dictations">--</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-row-label">Storage</span>
+        <span class="stat-row-value" id="tray-stat-storage">--</span>
+      </div>
+    </div>
+
+    <!-- Recent captures -->
+    <div class="recent-section" id="tray-recent-section">
+      <div class="recent-title">Recent</div>
+      <div id="tray-recent-list">
+        <div class="empty-text">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Search results (hidden by default) -->
+    <div class="search-results" id="tray-search-results">
+      <div class="search-results-count" id="tray-search-count"></div>
+      <div id="tray-search-list"></div>
+      <div class="search-help">Press Enter for full results &middot; Escape to clear</div>
+    </div>
+
+  </div>
+
+  <!-- Actions -->
+  <div class="actions-bar">
+    <button class="action-btn dictate" id="tray-dictate-btn" aria-label="Start dictation">
+      <span class="btn-icon" aria-hidden="true">&#9903;</span> Dictate
+    </button>
+    <button class="action-btn" id="tray-pause-btn" aria-label="Pause capture">
+      <span class="btn-icon" aria-hidden="true">&#9646;&#9646;</span> Pause
+    </button>
+    <button class="action-btn" id="tray-settings-btn" aria-label="Open settings">
+      <span class="btn-icon" aria-hidden="true">&#9881;</span> Settings
+    </button>
+    <button class="action-btn" id="tray-fullui-btn" aria-label="Open full dashboard">
+      <span class="btn-icon" aria-hidden="true">&#8599;</span> Full UI
+    </button>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  var API_BASE = 'http://localhost:3030';
+  var REFRESH_INTERVAL = 5000;
+  var SEARCH_DEBOUNCE = 300;
+
+  function $(sel) { return document.querySelector(sel); }
+  function $$(sel) { return document.querySelectorAll(sel); }
+
+  function api(path) {
+    return fetch(API_BASE + path).then(function(r) {
+      if (!r.ok) throw new Error('API error');
+      return r.json();
+    });
+  }
+
+  function apiPost(path, body) {
+    return fetch(API_BASE + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined
+    }).then(function(r) {
+      if (!r.ok) throw new Error('API error');
+      return r.json();
+    });
+  }
+
+  function escapeHtml(text) {
+    var d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
+  }
+
+  function formatRelativeTime(ts) {
+    var d = typeof ts === 'string' ? new Date(ts) : new Date(ts * 1000);
+    var diff = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (diff < 60) return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+  }
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+    return (bytes / 1073741824).toFixed(2) + ' GB';
+  }
+
+  function contentTypeDot(ct) {
+    switch (ct) {
+      case 'screen': return 'blue';
+      case 'audio': return 'teal';
+      case 'dictation': return 'orange';
+      default: return 'blue';
+    }
+  }
+
+  // ================================================================
+  // Status
+  // ================================================================
+  var isPaused = false;
+
+  function refreshStatus() {
+    api('/health').then(function(data) {
+      var dot = $('#tray-status-dot');
+      var label = $('#tray-status-label');
+      if (isPaused) {
+        dot.className = 'status-dot paused';
+        label.className = 'status-label paused';
+        label.textContent = 'Paused';
+      } else {
+        dot.className = 'status-dot';
+        label.className = 'status-label live';
+        label.textContent = 'Live';
+      }
+    }).catch(function() {
+      var dot = $('#tray-status-dot');
+      var label = $('#tray-status-label');
+      dot.className = 'status-dot paused';
+      label.className = 'status-label paused';
+      label.textContent = 'Offline';
+    });
+  }
+
+  // ================================================================
+  // Stats
+  // ================================================================
+  function refreshStats() {
+    api('/recent').then(function(data) {
+      var items = data.items || data || [];
+      var screen = 0, audio = 0, dict = 0;
+      items.forEach(function(i) {
+        switch (i.content_type) {
+          case 'screen': screen++; break;
+          case 'audio': audio++; break;
+          case 'dictation': dict++; break;
+        }
+      });
+      $('#tray-stat-captures').textContent = screen.toLocaleString();
+      $('#tray-stat-audio').textContent = audio.toString();
+      $('#tray-stat-dictations').textContent = dict.toString();
+
+      renderRecentItems(items.slice(0, 5));
+    }).catch(function() {
+      $('#tray-stat-captures').textContent = '--';
+      $('#tray-stat-audio').textContent = '--';
+      $('#tray-stat-dictations').textContent = '--';
+    });
+
+    api('/storage/stats').then(function(data) {
+      $('#tray-stat-storage').textContent = formatBytes(data.total_bytes || 0);
+    }).catch(function() {
+      $('#tray-stat-storage').textContent = '--';
+    });
+  }
+
+  // ================================================================
+  // Recent items
+  // ================================================================
+  function renderRecentItems(items) {
+    var container = $('#tray-recent-list');
+    if (!items.length) {
+      container.innerHTML = '<div class="empty-text">No captures yet.</div>';
+      return;
+    }
+
+    var html = '';
+    items.forEach(function(item) {
+      var dot = contentTypeDot(item.content_type);
+      var app = escapeHtml(item.app_name || 'Unknown');
+      if (item.window_title) app += ' - ' + escapeHtml(item.window_title);
+      var text = escapeHtml((item.text || '').substring(0, 80));
+      var time = formatRelativeTime(item.timestamp);
+
+      html += '<div class="recent-item">' +
+        '<div class="recent-dot ' + dot + '"></div>' +
+        '<div class="recent-content">' +
+        '<div class="recent-app">' + app + '</div>' +
+        '<div class="recent-text">"' + text + '"</div>' +
+        '<div class="recent-time">' + time + '</div>' +
+        '</div></div>';
+    });
+    container.innerHTML = html;
+  }
+
+  // ================================================================
+  // Search
+  // ================================================================
+  var searchTimer;
+
+  function performTraySearch(query) {
+    if (!query.trim()) {
+      exitSearch();
+      return;
+    }
+
+    // Show search results, hide stats+recent
+    $('#tray-stats-section').style.display = 'none';
+    $('#tray-recent-section').style.display = 'none';
+    $('#tray-search-results').classList.add('active');
+
+    api('/search?q=' + encodeURIComponent(query) + '&limit=5').then(function(data) {
+      var results = data.results || data || [];
+      $('#tray-search-count').textContent = results.length + ' result(s)';
+
+      var html = '';
+      results.forEach(function(r) {
+        var dot = contentTypeDot(r.content_type);
+        var app = escapeHtml(r.app_name || 'Unknown');
+        var text = escapeHtml((r.text || '').substring(0, 80));
+        var score = (r.score || 0).toFixed(2);
+        var time = r.timestamp ? new Date(r.timestamp).toLocaleTimeString() : '';
+
+        html += '<div class="search-result-item">' +
+          '<div class="search-result-header">' +
+          '<div class="recent-dot ' + dot + '" style="width:6px;height:6px;margin-top:0"></div>' +
+          '<span style="font-size:0.82rem;font-weight:600;">' + app + '</span>' +
+          '</div>' +
+          '<div class="search-result-text">"' + text + '"</div>' +
+          '<div class="search-result-meta"><span>Score: ' + score + '</span><span>' + time + '</span></div>' +
+          '</div>';
+      });
+
+      if (!results.length) {
+        html = '<div class="empty-text">No results found.</div>';
+      }
+
+      $('#tray-search-list').innerHTML = html;
+    }).catch(function() {
+      $('#tray-search-list').innerHTML = '<div class="empty-text">Search unavailable.</div>';
+      $('#tray-search-count').textContent = '';
+    });
+  }
+
+  function exitSearch() {
+    $('#tray-stats-section').style.display = '';
+    $('#tray-recent-section').style.display = '';
+    $('#tray-search-results').classList.remove('active');
+    $('#tray-search').value = '';
+  }
+
+  $('#tray-search').addEventListener('input', function() {
+    var query = this.value;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function() {
+      performTraySearch(query);
+    }, SEARCH_DEBOUNCE);
+  });
+
+  $('#tray-search').addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      exitSearch();
+    } else if (e.key === 'Enter') {
+      var query = this.value.trim();
+      if (query) {
+        window.open(API_BASE + '/ui#search', '_blank');
+      }
+    }
+  });
+
+  // ================================================================
+  // Action buttons
+  // ================================================================
+  $('#tray-dictate-btn').addEventListener('click', function() {
+    apiPost('/dictation/start').catch(function() {});
+  });
+
+  $('#tray-pause-btn').addEventListener('click', function() {
+    isPaused = !isPaused;
+    var btn = $('#tray-pause-btn');
+    if (isPaused) {
+      btn.innerHTML = '<span class="btn-icon" aria-hidden="true">&#9654;</span> Resume';
+      btn.setAttribute('aria-label', 'Resume capture');
+    } else {
+      btn.innerHTML = '<span class="btn-icon" aria-hidden="true">&#9646;&#9646;</span> Pause';
+      btn.setAttribute('aria-label', 'Pause capture');
+    }
+    refreshStatus();
+  });
+
+  $('#tray-settings-btn').addEventListener('click', function() {
+    window.open(API_BASE + '/ui#settings', '_blank');
+  });
+
+  $('#tray-fullui-btn').addEventListener('click', function() {
+    window.open(API_BASE + '/ui', '_blank');
+  });
+
+  // ================================================================
+  // Init
+  // ================================================================
+  function init() {
+    refreshStatus();
+    refreshStats();
+    setInterval(function() {
+      refreshStatus();
+      refreshStats();
+    }, REFRESH_INTERVAL);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+</body>
+</html>

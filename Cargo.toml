@@ -1,6 +1,24 @@
-[package]
-name = "engram"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = [
+    "crates/engram-core",
+    "crates/engram-ocr",
+    "crates/engram-whisper",
+    "crates/engram-vector",
+    "crates/engram-capture",
+    "crates/engram-audio",
+    "crates/engram-storage",
+    "crates/engram-dictation",
+    "crates/engram-api",
+    "crates/engram-ui",
+]
 
-[dependencies]
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+thiserror = "2"

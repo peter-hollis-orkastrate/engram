@@ -11,6 +11,7 @@ members = [
     "crates/engram-dictation",
     "crates/engram-api",
     "crates/engram-ui",
+    "crates/engram-app",
 ]
 
 [workspace.dependencies]

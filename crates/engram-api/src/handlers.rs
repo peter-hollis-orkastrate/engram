@@ -601,18 +601,9 @@ pub async fn health(
     }))
 }
 
-/// GET /ui - serve dashboard HTML placeholder.
+/// GET /ui - serve the full self-contained dashboard HTML.
 pub async fn ui() -> impl IntoResponse {
-    Html(
-        r#"<!DOCTYPE html>
-<html>
-<head><title>Engram Dashboard</title></head>
-<body>
-<h1>Engram Dashboard</h1>
-<p>Dashboard will be implemented in M3.</p>
-</body>
-</html>"#,
-    )
+    Html(engram_ui::dashboard::DASHBOARD_HTML)
 }
 
 #[cfg(test)]

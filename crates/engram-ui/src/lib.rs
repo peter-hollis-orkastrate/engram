@@ -25,4 +25,9 @@
 //! ```
 
 pub mod dashboard;
+pub mod tray;
 pub mod tray_panel;
+pub mod webview;
+
+pub use tray::{TrayMenuAction, TrayService, TrayState};
+pub use webview::{TrayPanelWebview, WebviewConfig};

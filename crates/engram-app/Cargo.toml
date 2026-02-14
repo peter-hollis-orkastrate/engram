@@ -1,0 +1,19 @@
+[package]
+name = "engram-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "engram"
+path = "src/main.rs"
+
+[dependencies]
+engram-core = { path = "../engram-core" }
+engram-storage = { path = "../engram-storage" }
+engram-vector = { path = "../engram-vector" }
+engram-api = { path = "../engram-api" }
+engram-ui = { path = "../engram-ui" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+axum = "0.8"

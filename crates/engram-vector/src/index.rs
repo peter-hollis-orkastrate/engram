@@ -5,11 +5,12 @@
 //! that `pipeline.rs`, `search.rs`, and `engram-api` continue to work unchanged.
 
 use std::collections::HashMap;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use serde_json::Value;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use engram_core::error::EngramError;
@@ -17,6 +18,21 @@ use ruvector_core::types::{
     DbOptions, DistanceMetric, HnswConfig, SearchQuery, VectorEntry as RuvectorEntry,
 };
 use ruvector_core::vector_db::VectorDB;
+
+/// L2-normalize a vector in-place. Returns the original norm.
+///
+/// Normalization prevents SimSIMD cosine distance from returning slightly
+/// negative values due to SIMD floating-point rounding, which would trigger
+/// an assertion panic in hnsw_rs.
+fn normalize_l2(v: &mut [f32]) -> f32 {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
+    }
+    norm
+}
 
 /// A single hit returned from a vector search.
 #[derive(Debug, Clone)]
@@ -87,7 +103,7 @@ impl VectorIndex {
             .join(format!("engram_vector_{}.db", Uuid::new_v4()));
         let options = DbOptions {
             dimensions,
-            distance_metric: DistanceMetric::Cosine,
+            distance_metric: DistanceMetric::Euclidean,
             storage_path: temp_path.to_string_lossy().to_string(),
             hnsw_config: Some(default_hnsw_config()),
             quantization: None,
@@ -108,7 +124,7 @@ impl VectorIndex {
 
         let options = DbOptions {
             dimensions,
-            distance_metric: DistanceMetric::Cosine,
+            distance_metric: DistanceMetric::Euclidean,
             storage_path: path_str,
             hnsw_config: Some(default_hnsw_config()),
             quantization: None,
@@ -131,6 +147,11 @@ impl VectorIndex {
     }
 
     /// Insert a vector with associated metadata into the index.
+    ///
+    /// The vector is L2-normalized before insertion to prevent floating-point
+    /// precision issues in SimSIMD's cosine distance (which can trigger panics
+    /// in hnsw_rs). The insert is also wrapped in `catch_unwind` as a safety
+    /// net against any residual assertion failures in the HNSW library.
     pub fn insert(
         &self,
         id: Uuid,
@@ -145,6 +166,12 @@ impl VectorIndex {
             )));
         }
 
+        // Defensively normalize to unit length. SimSIMD cosine distance can
+        // return slightly negative values for non-unit vectors due to SIMD
+        // floating-point rounding, which triggers `assert!(dist >= 0)` in hnsw_rs.
+        let mut normalized = embedding;
+        normalize_l2(&mut normalized);
+
         let id_str = id.to_string();
 
         // Convert metadata Value to HashMap<String, serde_json::Value> for ruvector
@@ -157,7 +184,7 @@ impl VectorIndex {
 
         let entry = RuvectorEntry {
             id: Some(id_str),
-            vector: embedding,
+            vector: normalized,
             metadata: rv_metadata,
         };
 
@@ -166,10 +193,34 @@ impl VectorIndex {
             .write()
             .map_err(|e| EngramError::Storage(format!("VectorDB lock poisoned: {}", e)))?;
 
-        db.insert(entry)
-            .map_err(|e| EngramError::Storage(format!("HNSW insert failed: {}", e)))?;
+        // Wrap in catch_unwind to prevent hnsw_rs assertion panics from
+        // killing the tokio worker thread (e.g., `assert!(c.dist_to_ref <= 0.)`).
+        let insert_result = panic::catch_unwind(AssertUnwindSafe(|| {
+            db.insert(entry)
+        }));
 
         drop(db);
+
+        match insert_result {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                return Err(EngramError::Storage(format!("HNSW insert failed: {}", e)));
+            }
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                warn!(id = %id, error = %msg, "HNSW insert panicked (caught)");
+                return Err(EngramError::Storage(format!(
+                    "HNSW insert panicked: {}",
+                    msg
+                )));
+            }
+        }
 
         // Store full metadata separately for retrieval
         let mut meta = self
@@ -186,6 +237,9 @@ impl VectorIndex {
     /// Returns results sorted by descending similarity score (higher = more similar).
     /// Internally, ruvector-core returns distances (lower = closer), so we convert
     /// cosine distance to similarity: similarity = 1.0 - distance.
+    ///
+    /// The query vector is normalized and the search is wrapped in `catch_unwind`
+    /// to prevent hnsw_rs assertion panics from crashing the runtime.
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchHit>, EngramError> {
         if query.len() != self.dimensions {
             return Err(EngramError::Search(format!(
@@ -195,23 +249,49 @@ impl VectorIndex {
             )));
         }
 
+        // Normalize query vector for consistent cosine distance behavior.
+        let mut query_norm = query.to_vec();
+        normalize_l2(&mut query_norm);
+
         let db = self
             .db
             .read()
             .map_err(|e| EngramError::Storage(format!("VectorDB lock poisoned: {}", e)))?;
 
         let search_query = SearchQuery {
-            vector: query.to_vec(),
+            vector: query_norm,
             k,
             filter: None,
             ef_search: None,
         };
 
-        let results = db
-            .search(search_query)
-            .map_err(|e| EngramError::Search(format!("HNSW search failed: {}", e)))?;
+        // Wrap in catch_unwind to prevent hnsw_rs assertion panics.
+        let search_result = panic::catch_unwind(AssertUnwindSafe(|| {
+            db.search(search_query)
+        }));
 
         drop(db);
+
+        let results = match search_result {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                return Err(EngramError::Search(format!("HNSW search failed: {}", e)));
+            }
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                warn!(error = %msg, "HNSW search panicked (caught)");
+                return Err(EngramError::Search(format!(
+                    "HNSW search panicked: {}",
+                    msg
+                )));
+            }
+        };
 
         let meta = self
             .metadata
@@ -222,10 +302,11 @@ impl VectorIndex {
             .into_iter()
             .filter_map(|r| {
                 let uuid = Uuid::parse_str(&r.id).ok()?;
-                // Convert ruvector distance to similarity score.
-                // For cosine distance: similarity = 1.0 - distance
-                // Clamp to [0.0, 1.0] range.
-                let similarity = (1.0 - r.score as f64).clamp(0.0, 1.0);
+                // Convert Euclidean distance to cosine similarity for normalized vectors.
+                // For unit vectors: euclidean_dist^2 = 2 * (1 - cos_similarity)
+                // Therefore: cos_similarity = 1 - (euclidean_dist^2 / 2)
+                let d = r.score as f64;
+                let similarity = (1.0 - (d * d / 2.0)).clamp(0.0, 1.0);
 
                 let entry_meta = meta.get(&uuid).cloned().unwrap_or(Value::Null);
 

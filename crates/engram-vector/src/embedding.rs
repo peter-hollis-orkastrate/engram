@@ -277,6 +277,18 @@ impl MockEmbedding {
             let val = ((h as f64) / (u64::MAX as f64)) * 2.0 - 1.0;
             result.push(val as f32);
         }
+
+        // L2-normalize to produce unit vectors (matching OnnxEmbeddingService).
+        // Without normalization, SimSIMD cosine distance can produce slightly
+        // negative values due to SIMD floating-point rounding, which triggers
+        // an assertion panic in hnsw_rs.
+        let norm: f32 = result.iter().map(|v| v * v).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for val in &mut result {
+                *val /= norm;
+            }
+        }
+
         result
     }
 }

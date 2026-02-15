@@ -30,8 +30,9 @@ use engram_ocr::{OcrConfig, OcrService, WindowsOcrService};
 async fn screen_capture_loop(
     pipeline: Arc<EngramPipeline<MockEmbedding>>,
     interval_secs: u64,
+    capture_config: CaptureConfig,
 ) {
-    let capture_service = WindowsCaptureService::new(CaptureConfig::default());
+    let capture_service = WindowsCaptureService::new(capture_config);
     let ocr_service = WindowsOcrService::new(OcrConfig::default());
 
     tracing::info!(interval_secs, "Screen capture loop started");
@@ -228,8 +229,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Screen capture + OCR loop.
     let capture_interval = (1.0 / config.screen.fps).max(1.0) as u64;
     let pipeline_capture = Arc::clone(&pipeline);
+
+    // Build CaptureConfig from the loaded TOML config.
+    let screenshot_dir = if config.screen.save_screenshots {
+        // Resolve data_dir (expand ~ to home).
+        let base = if config.general.data_dir.starts_with("~/") || config.general.data_dir.starts_with("~\\") {
+            #[cfg(target_os = "windows")]
+            let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
+            #[cfg(not(target_os = "windows"))]
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home).join(&config.general.data_dir[2..])
+        } else {
+            PathBuf::from(&config.general.data_dir)
+        };
+        base.join("screenshots")
+    } else {
+        PathBuf::from("data/screenshots")
+    };
+
+    let capture_cfg = CaptureConfig {
+        screenshot_dir: screenshot_dir.clone(),
+        save_screenshots: config.screen.save_screenshots,
+        monitor_index: 0,
+    };
+
+    if config.screen.save_screenshots {
+        tracing::info!(dir = %screenshot_dir.display(), "Screenshot saving enabled");
+    }
+
     tokio::spawn(async move {
-        screen_capture_loop(pipeline_capture, capture_interval).await;
+        screen_capture_loop(pipeline_capture, capture_interval, capture_cfg).await;
     });
 
     // Audio capture loop.

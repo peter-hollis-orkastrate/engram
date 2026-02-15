@@ -435,6 +435,7 @@ fn row_to_screen_frame(
         window_title,
         monitor_id: monitor_id.unwrap_or_default(),
         focused: focused != 0,
+        image_data: Vec::new(),
     })
 }
 
@@ -563,6 +564,7 @@ mod tests {
             monitor_id: "monitor_1".to_string(),
             text: "Some OCR text".to_string(),
             focused: true,
+            image_data: Vec::new(),
         }
     }
 

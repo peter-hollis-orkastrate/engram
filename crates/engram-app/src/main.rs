@@ -53,16 +53,16 @@ async fn screen_capture_loop(
         };
 
         // Step 2: If capture returned empty text, run OCR on the screenshot bytes.
-        if frame.text.is_empty() {
-            // The real flow passes raw screenshot bytes to OCR.
-            // WindowsCaptureService on Windows returns the screenshot as BMP data.
-            match ocr_service.extract_text(&[1]).await {
+        if frame.text.is_empty() && !frame.image_data.is_empty() {
+            match ocr_service.extract_text(&frame.image_data).await {
                 Ok(text) => frame.text = text,
                 Err(e) => {
                     tracing::debug!(error = %e, "OCR failed");
                     continue;
                 }
             }
+            // Drop BMP bytes after OCR to free memory.
+            frame.image_data = Vec::new();
         }
 
         if frame.text.trim().is_empty() {

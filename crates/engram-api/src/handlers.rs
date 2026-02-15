@@ -654,6 +654,7 @@ pub async fn ingest(
         monitor_id: "api".to_string(),
         text: body.text,
         focused: true,
+        image_data: Vec::new(),
     };
 
     let result = state

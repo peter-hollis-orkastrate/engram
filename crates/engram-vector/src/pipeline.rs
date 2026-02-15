@@ -281,6 +281,7 @@ mod tests {
             monitor_id: "monitor_1".to_string(),
             text: text.to_string(),
             focused: true,
+            image_data: Vec::new(),
         }
     }
 

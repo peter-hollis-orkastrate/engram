@@ -75,21 +75,18 @@ impl CaptureService for WindowsCaptureService {
     async fn capture_frame(&self) -> Result<ScreenFrame, EngramError> {
         let (app_name, window_title) = unsafe { get_foreground_window_info() };
 
-        let screenshot_path = if self.config.save_screenshots {
+        // Capture screenshot as BMP bytes in memory.
+        let bmp_data = unsafe { capture_screen_to_bmp_bytes()? };
+
+        // Optionally save to disk.
+        if self.config.save_screenshots {
             let id = Uuid::new_v4();
             let dir = &self.config.screenshot_dir;
             std::fs::create_dir_all(dir)?;
             let path = dir.join(format!("{}.bmp", id));
-            unsafe {
-                capture_screen_to_bmp(&path)?;
-            }
+            std::fs::write(&path, &bmp_data)?;
             debug!(path = %path.display(), "Screenshot saved");
-            Some(path.to_string_lossy().to_string())
-        } else {
-            None
-        };
-
-        let _ = screenshot_path; // Used by future OCR integration
+        }
 
         Ok(ScreenFrame {
             id: Uuid::new_v4(),
@@ -100,6 +97,7 @@ impl CaptureService for WindowsCaptureService {
             monitor_id: format!("monitor_{}", self.config.monitor_index),
             text: String::new(), // Populated by the OCR stage.
             focused: true,
+            image_data: bmp_data,
         })
     }
 }
@@ -160,8 +158,7 @@ unsafe fn get_process_name(pid: u32) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
-unsafe fn capture_screen_to_bmp(path: &std::path::Path) -> Result<(), EngramError> {
-    use std::io::Write;
+unsafe fn capture_screen_to_bmp_bytes() -> Result<Vec<u8>, EngramError> {
     use windows_sys::Win32::Graphics::Gdi::*;
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
@@ -218,33 +215,33 @@ unsafe fn capture_screen_to_bmp(path: &std::path::Path) -> Result<(), EngramErro
     DeleteDC(hdc_mem);
     ReleaseDC(0, hdc_screen);
 
-    // Write BMP file.
+    // Build BMP in memory.
     let file_size = 54u32 + image_size as u32;
-    let mut file = std::fs::File::create(path)?;
+    let mut buf = Vec::with_capacity(file_size as usize);
 
     // BMP file header (14 bytes).
-    file.write_all(b"BM")?;
-    file.write_all(&file_size.to_le_bytes())?;
-    file.write_all(&0u32.to_le_bytes())?; // reserved
-    file.write_all(&54u32.to_le_bytes())?; // pixel data offset
+    buf.extend_from_slice(b"BM");
+    buf.extend_from_slice(&file_size.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes()); // reserved
+    buf.extend_from_slice(&54u32.to_le_bytes()); // pixel data offset
 
-    // DIB header (40 bytes) — use positive height for BMP file format.
-    file.write_all(&bi_size.to_le_bytes())?;
-    file.write_all(&width.to_le_bytes())?;
-    file.write_all(&height.to_le_bytes())?; // positive = bottom-up in file
-    file.write_all(&1u16.to_le_bytes())?;
-    file.write_all(&bpp.to_le_bytes())?;
-    file.write_all(&0u32.to_le_bytes())?; // compression
-    file.write_all(&(image_size as u32).to_le_bytes())?;
-    file.write_all(&0i32.to_le_bytes())?; // x ppm
-    file.write_all(&0i32.to_le_bytes())?; // y ppm
-    file.write_all(&0u32.to_le_bytes())?; // colors used
-    file.write_all(&0u32.to_le_bytes())?; // important colors
+    // DIB header (40 bytes) — positive height for BMP format (bottom-up).
+    buf.extend_from_slice(&bi_size.to_le_bytes());
+    buf.extend_from_slice(&width.to_le_bytes());
+    buf.extend_from_slice(&height.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes());
+    buf.extend_from_slice(&bpp.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes()); // compression
+    buf.extend_from_slice(&(image_size as u32).to_le_bytes());
+    buf.extend_from_slice(&0i32.to_le_bytes()); // x ppm
+    buf.extend_from_slice(&0i32.to_le_bytes()); // y ppm
+    buf.extend_from_slice(&0u32.to_le_bytes()); // colors used
+    buf.extend_from_slice(&0u32.to_le_bytes()); // important colors
 
     // Pixel data.
-    file.write_all(&pixels)?;
+    buf.extend_from_slice(&pixels);
 
-    Ok(())
+    Ok(buf)
 }
 
 // =============================================================================

@@ -82,6 +82,7 @@ impl CaptureService for MockCaptureService {
             monitor_id: "monitor_1".to_string(),
             text: self.text.clone(),
             focused: true,
+            image_data: Vec::new(),
         })
     }
 }

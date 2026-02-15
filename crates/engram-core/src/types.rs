@@ -474,6 +474,9 @@ pub struct ScreenFrame {
     pub monitor_id: String,
     pub text: String,
     pub focused: bool,
+    /// Raw screenshot bytes (BMP). Excluded from JSON serialization.
+    #[serde(skip)]
+    pub image_data: Vec<u8>,
 }
 
 /// A fixed-duration audio segment from the virtual audio device.
@@ -696,6 +699,7 @@ mod tests {
             monitor_id: "monitor_65537".to_string(),
             text: "Some OCR text".to_string(),
             focused: true,
+            image_data: Vec::new(),
         };
 
         assert_eq!(frame.id, id);
@@ -863,6 +867,7 @@ mod tests {
             monitor_id: "mon_1".to_string(),
             text: "text".to_string(),
             focused: true,
+            image_data: Vec::new(),
         };
         let frame_clone = frame.clone();
         assert_eq!(frame.id, frame_clone.id);
@@ -908,6 +913,7 @@ mod tests {
             monitor_id: "monitor_1".to_string(),
             text: "Hello world".to_string(),
             focused: true,
+            image_data: Vec::new(),
         };
 
         let json = serde_json::to_string(&frame).unwrap();

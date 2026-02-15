@@ -13,6 +13,11 @@ engram-storage = { path = "../engram-storage" }
 engram-vector = { path = "../engram-vector" }
 engram-api = { path = "../engram-api" }
 engram-ui = { path = "../engram-ui" }
+engram-capture = { path = "../engram-capture" }
+engram-ocr = { path = "../engram-ocr" }
+engram-audio = { path = "../engram-audio" }
+engram-whisper = { path = "../engram-whisper" }
+engram-dictation = { path = "../engram-dictation" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

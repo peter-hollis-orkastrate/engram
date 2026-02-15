@@ -47,9 +47,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/storage/purge", post(handlers::storage_purge))
         // Configuration endpoints
         .route("/config", get(handlers::get_config).put(handlers::update_config))
+        // Ingest (manual data entry)
+        .route("/ingest", post(handlers::ingest))
         // Health check
         .route("/health", get(handlers::health))
-        // Dashboard placeholder
+        // Dashboard
         .route("/ui", get(handlers::ui))
         // Middleware layers
         .layer(CompressionLayer::new())

@@ -606,6 +606,85 @@ pub async fn ui() -> impl IntoResponse {
     Html(engram_ui::dashboard::DASHBOARD_HTML)
 }
 
+// =============================================================================
+// Ingest endpoint (manual data entry for testing)
+// =============================================================================
+
+/// Request body for POST /ingest.
+#[derive(Debug, Deserialize)]
+pub struct IngestRequest {
+    /// The text content to ingest.
+    pub text: String,
+    /// Content type: "screen", "audio", or "dictation". Defaults to "screen".
+    pub content_type: Option<String>,
+    /// Application name associated with the content.
+    pub app_name: Option<String>,
+    /// Window title associated with the content.
+    pub window_title: Option<String>,
+}
+
+/// Response for POST /ingest.
+#[derive(Debug, Serialize)]
+pub struct IngestResponse {
+    pub success: bool,
+    pub id: Option<Uuid>,
+    pub result: String,
+}
+
+/// POST /ingest - manually ingest text into the pipeline.
+///
+/// Useful for testing search without running the capture loop.
+pub async fn ingest(
+    State(state): State<AppState>,
+    Json(body): Json<IngestRequest>,
+) -> Result<Json<IngestResponse>, ApiError> {
+    if body.text.trim().is_empty() {
+        return Err(ApiError::BadRequest("'text' must not be empty".to_string()));
+    }
+
+    let app_name = body.app_name.unwrap_or_else(|| "Manual".to_string());
+    let window_title = body.window_title.unwrap_or_else(|| "API Ingest".to_string());
+
+    let frame = engram_core::types::ScreenFrame {
+        id: Uuid::new_v4(),
+        content_type: engram_core::types::ContentType::Screen,
+        timestamp: chrono::Utc::now(),
+        app_name,
+        window_title,
+        monitor_id: "api".to_string(),
+        text: body.text,
+        focused: true,
+    };
+
+    let result = state
+        .pipeline
+        .ingest_screen(frame)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Ingest failed: {}", e)))?;
+
+    let (success, id, msg) = match result {
+        engram_vector::IngestResult::Stored { id } => (true, Some(id), "Stored".to_string()),
+        engram_vector::IngestResult::Redacted { id, redaction_count } => {
+            (true, Some(id), format!("Stored with {} PII redactions", redaction_count))
+        }
+        engram_vector::IngestResult::Deduplicated { similarity } => {
+            (false, None, format!("Deduplicated (similarity: {:.3})", similarity))
+        }
+        engram_vector::IngestResult::Skipped { reason } => {
+            (false, None, format!("Skipped: {}", reason))
+        }
+        engram_vector::IngestResult::Denied { reason } => {
+            (false, None, format!("Denied: {}", reason))
+        }
+    };
+
+    Ok(Json(IngestResponse {
+        success,
+        id,
+        result: msg,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

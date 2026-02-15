@@ -61,13 +61,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState::new(config, index, db, pipeline);
 
     // Start the API server.
-    let addr = "127.0.0.1:3030";
-    tracing::info!(addr, "Starting API server");
-    tracing::info!("Dashboard available at http://{}/ui", addr);
+    // Port can be overridden via ENGRAM_PORT environment variable.
+    let port = std::env::var("ENGRAM_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(3030);
+    let addr = format!("127.0.0.1:{}", port);
 
     let router = routes::create_router(state);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(addr = %addr, error = %e, "Failed to bind port — is another instance running?");
+            tracing::error!("Try: netstat -ano | findstr :{}", port);
+            tracing::error!("Or use a different port: ENGRAM_PORT=3031 cargo run -p engram-app");
+            return Err(e.into());
+        }
+    };
+
+    tracing::info!(addr = %addr, "API server listening");
+    tracing::info!("Dashboard available at http://{}/ui", addr);
+
     axum::serve(listener, router).await?;
 
     Ok(())

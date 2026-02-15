@@ -1536,52 +1536,101 @@ body {
   }
 
   // ================================================================
-  // Dashboard: Activity Timeline
+  // Dashboard: Activity Timeline (data-driven)
   // ================================================================
   function generateTimeline(chartId, labelsId, bucketCount) {
     var chart = document.getElementById(chartId);
     var labels = document.getElementById(labelsId);
-    if (!chart || chart.children.length > 0) return;
+    if (!chart) return;
+
+    // Fetch recent captures and bucket by time.
+    api('/recent?limit=100').then(function(data) {
+      var items = data.results || data.items || data || [];
+      renderTimelineBars(chart, labels, bucketCount, items);
+    }).catch(function() {
+      renderTimelineBars(chart, labels, bucketCount, []);
+    });
+  }
+
+  function renderTimelineBars(chart, labels, bucketCount, items) {
+    chart.innerHTML = '';
+    if (labels) labels.innerHTML = '';
 
     var now = new Date();
-    var startHour = now.getHours() - Math.floor(bucketCount / 4);
-    if (startHour < 0) startHour += 24;
+    // Each bucket = 15 minutes, covering the last bucketCount*15 min.
+    var bucketMs = 15 * 60 * 1000;
+    var startTime = now.getTime() - bucketCount * bucketMs;
 
+    // Initialize buckets.
+    var buckets = [];
     for (var i = 0; i < bucketCount; i++) {
+      buckets.push({ screen: 0, audio: 0, dictation: 0 });
+    }
+
+    // Place items into buckets.
+    items.forEach(function(item) {
+      var ts = typeof item.timestamp === 'string' ? new Date(item.timestamp).getTime() : item.timestamp * 1000;
+      var idx = Math.floor((ts - startTime) / bucketMs);
+      if (idx >= 0 && idx < bucketCount) {
+        var ct = item.content_type || 'screen';
+        if (ct === 'screen') buckets[idx].screen++;
+        else if (ct === 'audio') buckets[idx].audio++;
+        else if (ct === 'dictation') buckets[idx].dictation++;
+      }
+    });
+
+    // Find max for scaling.
+    var maxCount = 1;
+    buckets.forEach(function(b) {
+      var t = b.screen + b.audio + b.dictation;
+      if (t > maxCount) maxCount = t;
+    });
+
+    // Render bars.
+    buckets.forEach(function(b) {
       var group = document.createElement('div');
       group.className = 'timeline-bar-group';
 
-      var screenH = Math.floor(Math.random() * 50) + 10;
-      var audioH = Math.random() > 0.6 ? Math.floor(Math.random() * 25) : 0;
-      var dictH = Math.random() > 0.8 ? Math.floor(Math.random() * 12) : 0;
-
-      if (dictH > 0) {
-        var d = document.createElement('div');
-        d.className = 'timeline-bar dictation';
-        d.style.height = dictH + '%';
-        group.appendChild(d);
+      var total = b.screen + b.audio + b.dictation;
+      if (total === 0) {
+        // Empty bar placeholder.
+        var empty = document.createElement('div');
+        empty.className = 'timeline-bar screen';
+        empty.style.height = '2%';
+        empty.style.opacity = '0.2';
+        group.appendChild(empty);
+      } else {
+        if (b.dictation > 0) {
+          var d = document.createElement('div');
+          d.className = 'timeline-bar dictation';
+          d.style.height = Math.round((b.dictation / maxCount) * 80) + '%';
+          group.appendChild(d);
+        }
+        if (b.audio > 0) {
+          var a = document.createElement('div');
+          a.className = 'timeline-bar audio';
+          a.style.height = Math.round((b.audio / maxCount) * 80) + '%';
+          group.appendChild(a);
+        }
+        if (b.screen > 0) {
+          var s = document.createElement('div');
+          s.className = 'timeline-bar screen';
+          s.style.height = Math.round((b.screen / maxCount) * 80) + '%';
+          group.appendChild(s);
+        }
       }
-      if (audioH > 0) {
-        var a = document.createElement('div');
-        a.className = 'timeline-bar audio';
-        a.style.height = audioH + '%';
-        group.appendChild(a);
-      }
-      var s = document.createElement('div');
-      s.className = 'timeline-bar screen';
-      s.style.height = screenH + '%';
-      group.appendChild(s);
-
       chart.appendChild(group);
-    }
+    });
 
-    // Generate labels
+    // Generate time labels.
     if (labels) {
-      var labelCount = Math.min(8, bucketCount / 4);
+      var labelCount = Math.min(8, Math.floor(bucketCount / 4));
       for (var j = 0; j < labelCount; j++) {
-        var h = (startHour + j * Math.floor(bucketCount / labelCount / 4)) % 24;
+        var t = new Date(startTime + j * Math.floor(bucketCount / labelCount) * bucketMs);
         var span = document.createElement('span');
-        span.textContent = (h < 10 ? '0' : '') + h + ':00';
+        var hh = t.getHours();
+        var mm = t.getMinutes();
+        span.textContent = (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm;
         labels.appendChild(span);
       }
     }
@@ -1736,11 +1785,11 @@ body {
       container.innerHTML = '<div class="empty-state"><div class="empty-state-text">No app data yet.</div></div>';
       return;
     }
-    var total = apps.reduce(function(sum, a) { return sum + (a.count || 0); }, 0) || 1;
+    var total = apps.reduce(function(sum, a) { return sum + (a.capture_count || a.count || 0); }, 0) || 1;
     var html = '';
     apps.forEach(function(a) {
       var name = escapeHtml(a.name || a);
-      var count = a.count || 0;
+      var count = a.capture_count || a.count || 0;
       var pct = Math.round((count / total) * 100);
       var barWidth = Math.max(2, pct);
       html += '<div class="bar-chart-row" data-app="' + name + '" style="cursor:pointer">' +

@@ -183,7 +183,7 @@ unsafe fn capture_screen_to_bmp_bytes() -> Result<Vec<u8>, EngramError> {
         return Err(EngramError::Capture("BitBlt failed".into()));
     }
 
-    // Prepare BITMAPINFOHEADER for 24-bit top-down DIB.
+    // Prepare BITMAPINFOHEADER for 24-bit bottom-up DIB (standard BMP).
     let bi_size = 40u32;
     let bpp = 24u16;
     let stride = ((width * 3 + 3) & !3) as usize;
@@ -191,10 +191,11 @@ unsafe fn capture_screen_to_bmp_bytes() -> Result<Vec<u8>, EngramError> {
     let mut pixels = vec![0u8; image_size];
 
     // Pack BITMAPINFOHEADER manually (40 bytes).
+    // Positive height = bottom-up pixel order (matches BMP file format).
     let mut bih = vec![0u8; 40];
     bih[0..4].copy_from_slice(&bi_size.to_le_bytes());
     bih[4..8].copy_from_slice(&width.to_le_bytes());
-    bih[8..12].copy_from_slice(&(-height).to_le_bytes()); // negative = top-down
+    bih[8..12].copy_from_slice(&height.to_le_bytes()); // positive = bottom-up
     bih[12..14].copy_from_slice(&1u16.to_le_bytes()); // planes
     bih[14..16].copy_from_slice(&bpp.to_le_bytes());
     // Bytes 16-39 are zero (no compression, default values).

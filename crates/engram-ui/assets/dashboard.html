@@ -1331,7 +1331,7 @@ body {
   // ================================================================
   // Configuration
   // ================================================================
-  var API_BASE = 'http://localhost:3030';
+  var API_BASE = '';  // Relative — dashboard is served from the same server.
   var REFRESH_INTERVAL = 5000;
   var SEARCH_DEBOUNCE = 300;
 
@@ -1467,7 +1467,7 @@ body {
 
     // Fetch recent captures
     api('/recent').then(function(data) {
-      var items = data.items || data || [];
+      var items = data.results || data.items || data || [];
       renderRecentCaptures(items);
       updateDashboardStats(items);
     }).catch(function() {

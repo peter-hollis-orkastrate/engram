@@ -3,6 +3,7 @@
 //! AppState holds references to all services and shared resources.
 //! It is passed to handlers via axum's State extractor.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -35,6 +36,8 @@ pub struct AppState {
     pub event_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
     /// Server start time for uptime calculation.
     pub start_time: Instant,
+    /// Path to the config file for persistence.
+    pub config_path: PathBuf,
 }
 
 impl AppState {
@@ -44,6 +47,17 @@ impl AppState {
         vector_index: Arc<VectorIndex>,
         database: Database,
         pipeline: EngramPipeline<MockEmbedding>,
+    ) -> Self {
+        Self::with_config_path(config, vector_index, database, pipeline, PathBuf::from("config.toml"))
+    }
+
+    /// Create a new AppState with a specific config file path.
+    pub fn with_config_path(
+        config: EngramConfig,
+        vector_index: Arc<VectorIndex>,
+        database: Database,
+        pipeline: EngramPipeline<MockEmbedding>,
+        config_path: PathBuf,
     ) -> Self {
         let (event_tx, _) = tokio::sync::broadcast::channel(256);
         let db_arc = Arc::new(database);
@@ -67,6 +81,7 @@ impl AppState {
             query_service,
             event_tx,
             start_time: Instant::now(),
+            config_path,
         }
     }
 }

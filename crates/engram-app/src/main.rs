@@ -215,7 +215,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.safety.clone(),
         config.search.dedup_threshold,
     );
-    let state = AppState::new(config.clone(), Arc::clone(&index), api_db, api_pipeline);
+    let state = AppState::with_config_path(
+        config.clone(),
+        Arc::clone(&index),
+        api_db,
+        api_pipeline,
+        config_file.clone(),
+    );
 
     // === Background tasks ===
 

@@ -577,6 +577,12 @@ pub async fn update_config(
         .map_err(|e| ApiError::BadRequest(format!("Invalid configuration value: {}", e)))?;
 
     *config = updated.clone();
+
+    // Persist to disk.
+    if let Err(e) = updated.save(&state.config_path) {
+        tracing::warn!(error = %e, path = %state.config_path.display(), "Failed to save config to disk");
+    }
+
     Ok(Json(updated))
 }
 

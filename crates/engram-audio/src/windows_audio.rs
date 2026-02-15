@@ -187,11 +187,31 @@ impl AudioCaptureService for WindowsAudioService {
         let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
         debug!(device = %device_name, "Selected audio device");
 
-        // Configure the stream.
-        let stream_config = cpal::StreamConfig {
-            channels: self.config.channels,
-            sample_rate: cpal::SampleRate(self.config.sample_rate),
-            buffer_size: cpal::BufferSize::Default,
+        // Query the device's preferred config instead of forcing our own.
+        // Many devices don't support arbitrary sample rates / channel counts.
+        let stream_config = match device.default_input_config() {
+            Ok(supported) => {
+                info!(
+                    device = %device_name,
+                    sample_rate = supported.sample_rate().0,
+                    channels = supported.channels(),
+                    format = ?supported.sample_format(),
+                    "Using device's default config"
+                );
+                cpal::StreamConfig {
+                    channels: supported.channels(),
+                    sample_rate: supported.sample_rate(),
+                    buffer_size: cpal::BufferSize::Default,
+                }
+            }
+            Err(e) => {
+                debug!(error = %e, "Could not query default config, falling back to requested config");
+                cpal::StreamConfig {
+                    channels: self.config.channels,
+                    sample_rate: cpal::SampleRate(self.config.sample_rate),
+                    buffer_size: cpal::BufferSize::Default,
+                }
+            }
         };
 
         let buffer = self.buffer.clone();

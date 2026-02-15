@@ -43,7 +43,7 @@ pub enum IngestResult {
 /// 4. Embedding generation
 /// 5. Vector index insertion
 pub struct EngramPipeline<E: EmbeddingService> {
-    index: VectorIndex,
+    index: Arc<VectorIndex>,
     embedder: E,
     safety_gate: SafetyGate,
     dedup_threshold: f64,
@@ -51,12 +51,12 @@ pub struct EngramPipeline<E: EmbeddingService> {
 }
 
 impl<E: EmbeddingService> EngramPipeline<E> {
-    /// Create a new pipeline with the given index, embedder, safety config, and dedup threshold.
+    /// Create a new pipeline with a shared index, embedder, safety config, and dedup threshold.
     ///
     /// The `dedup_threshold` controls the cosine similarity threshold above which
     /// an entry is considered a duplicate. Default is 0.95.
     pub fn new(
-        index: VectorIndex,
+        index: Arc<VectorIndex>,
         embedder: E,
         safety_config: SafetyConfig,
         dedup_threshold: f64,
@@ -71,7 +71,7 @@ impl<E: EmbeddingService> EngramPipeline<E> {
     }
 
     /// Create a new pipeline with the default safety config and dedup threshold of 0.95.
-    pub fn with_defaults(index: VectorIndex, embedder: E) -> Self {
+    pub fn with_defaults(index: Arc<VectorIndex>, embedder: E) -> Self {
         Self::new(index, embedder, SafetyConfig::default(), 0.95)
     }
 
@@ -264,11 +264,11 @@ mod tests {
     use engram_core::types::{ContentType, DictationMode};
 
     fn make_pipeline() -> EngramPipeline<MockEmbedding> {
-        EngramPipeline::with_defaults(VectorIndex::new(), MockEmbedding::new())
+        EngramPipeline::with_defaults(Arc::new(VectorIndex::new()), MockEmbedding::new())
     }
 
     fn make_pipeline_with_safety(config: SafetyConfig) -> EngramPipeline<MockEmbedding> {
-        EngramPipeline::new(VectorIndex::new(), MockEmbedding::new(), config, 0.95)
+        EngramPipeline::new(Arc::new(VectorIndex::new()), MockEmbedding::new(), config, 0.95)
     }
 
     fn make_screen_frame(text: &str) -> ScreenFrame {
@@ -402,7 +402,7 @@ mod tests {
     async fn test_custom_dedup_threshold() {
         // Use a very low threshold so almost everything is a duplicate.
         let pipeline = EngramPipeline::new(
-            VectorIndex::new(),
+            Arc::new(VectorIndex::new()),
             MockEmbedding::new(),
             SafetyConfig::default(),
             -1.0, // Everything above -1.0 is a "duplicate"
@@ -510,7 +510,7 @@ mod tests {
 
     fn make_pipeline_with_db() -> (EngramPipeline<MockEmbedding>, Arc<Database>) {
         let db = Arc::new(Database::in_memory().unwrap());
-        let pipeline = EngramPipeline::with_defaults(VectorIndex::new(), MockEmbedding::new())
+        let pipeline = EngramPipeline::with_defaults(Arc::new(VectorIndex::new()), MockEmbedding::new())
             .with_database(Arc::clone(&db));
         (pipeline, db)
     }
@@ -591,7 +591,7 @@ mod tests {
         };
         let db = Arc::new(Database::in_memory().unwrap());
         let pipeline = EngramPipeline::new(
-            VectorIndex::new(),
+            Arc::new(VectorIndex::new()),
             MockEmbedding::new(),
             config,
             0.95,

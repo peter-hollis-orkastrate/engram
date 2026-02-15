@@ -620,10 +620,10 @@ mod tests {
 
     fn make_state() -> AppState {
         let config = EngramConfig::default();
-        let index = VectorIndex::new();
+        let index = std::sync::Arc::new(VectorIndex::new());
         let db = Database::in_memory().unwrap();
         let pipeline = EngramPipeline::new(
-            index.clone(),
+            std::sync::Arc::clone(&index),
             MockEmbedding::new(),
             SafetyConfig::default(),
             0.95,

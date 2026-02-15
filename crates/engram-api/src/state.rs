@@ -41,17 +41,17 @@ impl AppState {
     /// Create a new AppState with the given components.
     pub fn new(
         config: EngramConfig,
-        vector_index: VectorIndex,
+        vector_index: Arc<VectorIndex>,
         database: Database,
         pipeline: EngramPipeline<MockEmbedding>,
     ) -> Self {
         let (event_tx, _) = tokio::sync::broadcast::channel(256);
         let db_arc = Arc::new(database);
-        let index_arc = Arc::new(vector_index);
+        let index_arc = vector_index;
 
-        // Build search engine from a clone of the index and a fresh embedder.
+        // Build search engine sharing the same index (no clone).
         let search_engine = Arc::new(SearchEngine::new(
-            (*index_arc).clone(),
+            Arc::clone(&index_arc),
             MockEmbedding::new(),
         ));
         let fts_search = Arc::new(FtsSearch::new(Arc::clone(&db_arc)));

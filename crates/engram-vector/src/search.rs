@@ -10,6 +10,8 @@ use uuid::Uuid;
 use engram_core::error::EngramError;
 use engram_core::types::ContentType;
 
+use std::sync::Arc;
+
 use crate::embedding::EmbeddingService;
 use crate::index::VectorIndex;
 
@@ -43,13 +45,13 @@ pub struct SearchResult {
 
 /// Search engine combining vector similarity with metadata filtering.
 pub struct SearchEngine<E: EmbeddingService> {
-    index: VectorIndex,
+    index: Arc<VectorIndex>,
     embedder: E,
 }
 
 impl<E: EmbeddingService> SearchEngine<E> {
-    /// Create a new search engine with the given index and embedding service.
-    pub fn new(index: VectorIndex, embedder: E) -> Self {
+    /// Create a new search engine with a shared index and embedding service.
+    pub fn new(index: Arc<VectorIndex>, embedder: E) -> Self {
         Self { index, embedder }
     }
 
@@ -152,7 +154,7 @@ mod tests {
     use crate::embedding::MockEmbedding;
 
     fn make_engine() -> SearchEngine<MockEmbedding> {
-        SearchEngine::new(VectorIndex::new(), MockEmbedding::new())
+        SearchEngine::new(Arc::new(VectorIndex::new()), MockEmbedding::new())
     }
 
     #[tokio::test]

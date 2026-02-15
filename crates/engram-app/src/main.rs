@@ -12,6 +12,7 @@
 //! - Screen capture and OCR (via engram-capture + engram-ocr)
 
 use std::path::Path;
+use std::sync::Arc;
 
 use engram_core::config::{EngramConfig, SafetyConfig};
 use engram_storage::Database;
@@ -42,14 +43,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = Database::new(db_path)?;
     tracing::info!(path = %db_path.display(), "SQLite database opened");
 
-    // Initialize vector index.
-    let index = VectorIndex::new();
+    // Initialize vector index (single instance shared across pipeline and search).
+    let index = Arc::new(VectorIndex::new());
     tracing::info!("HNSW vector index initialized");
 
     // Build ingestion pipeline.
     // TODO: Replace MockEmbedding with OnnxEmbeddingService when model is available.
     let pipeline = EngramPipeline::new(
-        index.clone(),
+        Arc::clone(&index),
         MockEmbedding::new(),
         SafetyConfig::default(),
         0.95,

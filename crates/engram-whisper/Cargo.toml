@@ -1,0 +1,16 @@
+[package]
+name = "engram-whisper"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+# Enable real whisper.cpp transcription (requires cmake + C++ compiler).
+whisper = ["dep:whisper-rs"]
+
+[dependencies]
+engram-core = { path = "../engram-core" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+whisper-rs = { version = "0.13", optional = true }

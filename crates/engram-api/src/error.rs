@@ -69,7 +69,12 @@ impl IntoResponse for ApiError {
                 )
             }
             ApiError::ServiceUnavailable(msg) => {
-                (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable", msg)
+                tracing::error!("Service unavailable: {}", msg);
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "service_unavailable",
+                    "Service temporarily unavailable".to_string(),
+                )
             }
         };
 

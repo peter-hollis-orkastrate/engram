@@ -486,7 +486,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate or load API authentication token.
     let token_path = data_dir.join(".api_token");
     let api_token = engram_api::auth::load_or_generate_token(&token_path);
-    tracing::info!("API token: {}", api_token);
+    tracing::info!("API token loaded (length: {} chars)", api_token.len());
 
     // Shared state for audio and dictation control.
     let audio_active = Arc::new(AtomicBool::new(false));

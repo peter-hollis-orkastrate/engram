@@ -574,6 +574,10 @@ pub async fn update_config(
     State(state): State<AppState>,
     Json(partial): Json<serde_json::Value>,
 ) -> Result<Json<engram_core::config::EngramConfig>, ApiError> {
+    // CHECK: Reject safety field modifications before acquiring lock.
+    engram_core::config::EngramConfig::validate_update(&partial)
+        .map_err(|e| ApiError::Forbidden(format!("{}", e)))?;
+
     let mut config = state
         .config
         .lock()

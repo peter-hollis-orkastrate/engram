@@ -578,6 +578,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         screenshot_dir: screenshot_dir.clone(),
         save_screenshots: config.screen.save_screenshots,
         monitor_index: 0,
+        fps: config.screen.fps,
     };
 
     if config.screen.save_screenshots {

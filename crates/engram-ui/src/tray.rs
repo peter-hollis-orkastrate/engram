@@ -181,6 +181,11 @@ impl TrayService {
     pub fn poll_menu_event(&self) -> Option<TrayMenuAction> {
         None
     }
+
+    /// Handle a tray icon click event by toggling the panel.
+    pub fn on_tray_click(&self, panel_state: &mut crate::webview::TrayPanelState) {
+        panel_state.toggle();
+    }
 }
 
 impl Default for TrayService {
@@ -249,5 +254,21 @@ mod tests {
     fn test_tray_service_default() {
         let service = TrayService::default();
         assert_eq!(service.state(), TrayState::Idle);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_on_tray_click_toggles_panel() {
+        use crate::webview::TrayPanelState;
+
+        let service = TrayService::new().unwrap();
+        let mut panel = TrayPanelState::new();
+        assert!(!panel.is_visible());
+
+        service.on_tray_click(&mut panel);
+        assert!(panel.is_visible());
+
+        service.on_tray_click(&mut panel);
+        assert!(!panel.is_visible());
     }
 }

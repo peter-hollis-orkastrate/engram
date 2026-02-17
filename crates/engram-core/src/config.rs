@@ -9,7 +9,7 @@ use crate::error::{EngramError, Result};
 ///
 /// Loaded from `~/.engram/config.toml` by default. Each section corresponds
 /// to a bounded context or cross-cutting concern.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EngramConfig {
     #[serde(default)]
     pub general: GeneralConfig,
@@ -29,20 +29,7 @@ pub struct EngramConfig {
     pub safety: SafetyConfig,
 }
 
-impl Default for EngramConfig {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            tray: TrayConfig::default(),
-            screen: ScreenConfig::default(),
-            audio: AudioConfig::default(),
-            dictation: DictationConfig::default(),
-            search: SearchConfig::default(),
-            storage: StorageConfig::default(),
-            safety: SafetyConfig::default(),
-        }
-    }
-}
+// Default is derived via #[derive(Default)] on each sub-config's #[serde(default)].
 
 impl EngramConfig {
     /// Load configuration from a TOML file.
@@ -112,6 +99,23 @@ pub struct GeneralConfig {
     /// If empty or not set, will look in {data_dir}/models/
     #[serde(default)]
     pub embedding_model_dir: String,
+    /// API server port.
+    #[serde(default = "default_port")]
+    pub port: u16,
+    /// Whether to start Engram on system boot (OS-level autostart).
+    #[serde(default)]
+    pub start_on_boot: bool,
+    /// Whether to minimize to system tray instead of closing.
+    #[serde(default = "default_true")]
+    pub minimize_to_tray: bool,
+}
+
+fn default_port() -> u16 {
+    3030
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for GeneralConfig {
@@ -121,6 +125,9 @@ impl Default for GeneralConfig {
             log_level: "info".to_string(),
             autostart: true,
             embedding_model_dir: String::new(),
+            port: 3030,
+            start_on_boot: false,
+            minimize_to_tray: true,
         }
     }
 }
@@ -133,6 +140,33 @@ pub struct TrayConfig {
     pub show_icon: bool,
     /// Show capture notifications.
     pub show_notifications: bool,
+    /// Width of the tray panel in pixels.
+    #[serde(default = "default_panel_width")]
+    pub panel_width: u32,
+    /// Height of the tray panel in pixels.
+    #[serde(default = "default_panel_height")]
+    pub panel_height: u32,
+    /// Number of recent items to show in the tray panel.
+    #[serde(default = "default_recent_items")]
+    pub recent_items: u32,
+    /// Show statistics in the tray panel.
+    #[serde(default = "default_true")]
+    pub show_stats: bool,
+    /// Enable quick search from the tray panel.
+    #[serde(default = "default_true")]
+    pub quick_search: bool,
+}
+
+fn default_panel_width() -> u32 {
+    400
+}
+
+fn default_panel_height() -> u32 {
+    500
+}
+
+fn default_recent_items() -> u32 {
+    10
 }
 
 impl Default for TrayConfig {
@@ -140,6 +174,11 @@ impl Default for TrayConfig {
         Self {
             show_icon: true,
             show_notifications: false,
+            panel_width: 400,
+            panel_height: 500,
+            recent_items: 10,
+            show_stats: true,
+            quick_search: true,
         }
     }
 }
@@ -161,6 +200,19 @@ pub struct ScreenConfig {
     /// Screenshot storage configuration.
     #[serde(default)]
     pub screenshot_storage: ScreenshotStorageConfig,
+    /// Whether screen capture is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Screenshot quality for capture (1-100). Separate from screenshot_storage.quality.
+    #[serde(default = "default_screenshot_quality")]
+    pub screenshot_quality: u8,
+    /// Whether to capture screenshots when the window is unfocused.
+    #[serde(default = "default_true")]
+    pub capture_unfocused: bool,
+}
+
+fn default_screenshot_quality() -> u8 {
+    80
 }
 
 impl Default for ScreenConfig {
@@ -172,6 +224,9 @@ impl Default for ScreenConfig {
             ignored_apps: vec![],
             save_screenshots: false,
             screenshot_storage: ScreenshotStorageConfig::default(),
+            enabled: true,
+            screenshot_quality: 80,
+            capture_unfocused: true,
         }
     }
 }
@@ -215,6 +270,40 @@ pub struct AudioConfig {
     /// Audio file storage configuration.
     #[serde(default)]
     pub audio_storage: AudioFileStorageConfig,
+    /// Source audio device name (None = system default).
+    #[serde(default)]
+    pub source_device: Option<String>,
+    /// Virtual device name for audio routing.
+    #[serde(default = "default_virtual_device_name")]
+    pub virtual_device_name: String,
+    /// Transcription engine: "whisper" or other.
+    #[serde(default = "default_transcription_engine")]
+    pub transcription_engine: String,
+    /// Language for transcription ("auto" for automatic detection).
+    #[serde(default = "default_language")]
+    pub language: String,
+    /// Whether to store raw audio files.
+    #[serde(default)]
+    pub store_audio_files: bool,
+    /// Number of days to retain audio files.
+    #[serde(default = "default_audio_retention_days")]
+    pub audio_retention_days: u32,
+}
+
+fn default_virtual_device_name() -> String {
+    "Engram Mic".to_string()
+}
+
+fn default_transcription_engine() -> String {
+    "whisper".to_string()
+}
+
+fn default_language() -> String {
+    "auto".to_string()
+}
+
+fn default_audio_retention_days() -> u32 {
+    7
 }
 
 impl Default for AudioConfig {
@@ -226,6 +315,12 @@ impl Default for AudioConfig {
             vad_sensitivity: "medium".to_string(),
             whisper_model: "base".to_string(),
             audio_storage: AudioFileStorageConfig::default(),
+            source_device: None,
+            virtual_device_name: "Engram Mic".to_string(),
+            transcription_engine: "whisper".to_string(),
+            language: "auto".to_string(),
+            store_audio_files: false,
+            audio_retention_days: 7,
         }
     }
 }
@@ -266,6 +361,21 @@ pub struct DictationConfig {
     pub silence_timeout_ms: u32,
     /// Overlay indicator position.
     pub overlay_position: String,
+    /// Whether dictation is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Whether to show the dictation overlay indicator.
+    #[serde(default = "default_true")]
+    pub show_overlay: bool,
+    /// Whether to store dictation text.
+    #[serde(default = "default_true")]
+    pub store_dictation: bool,
+    /// Transcription engine for dictation.
+    #[serde(default = "default_transcription_engine")]
+    pub transcription_engine: String,
+    /// Language for dictation transcription.
+    #[serde(default = "default_language")]
+    pub language: String,
 }
 
 impl Default for DictationConfig {
@@ -276,6 +386,11 @@ impl Default for DictationConfig {
             max_duration_secs: 120,
             silence_timeout_ms: 2000,
             overlay_position: "cursor".to_string(),
+            enabled: true,
+            show_overlay: true,
+            store_dictation: true,
+            transcription_engine: "whisper".to_string(),
+            language: "auto".to_string(),
         }
     }
 }
@@ -296,6 +411,23 @@ pub struct SearchConfig {
     pub dedup_threshold: f64,
     /// Default semantic weight for hybrid search (0.0 to 1.0).
     pub semantic_weight: f64,
+    /// Search engine type: "hybrid", "semantic", "keyword".
+    #[serde(default = "default_search_engine")]
+    pub engine: String,
+    /// Whether to redact PII in search results.
+    #[serde(default = "default_true")]
+    pub pii_redaction: bool,
+    /// Vector quantization format for search index.
+    #[serde(default = "default_quantization")]
+    pub quantization: String,
+}
+
+fn default_search_engine() -> String {
+    "hybrid".to_string()
+}
+
+fn default_quantization() -> String {
+    "float32".to_string()
 }
 
 impl Default for SearchConfig {
@@ -307,6 +439,9 @@ impl Default for SearchConfig {
             max_limit: 100,
             dedup_threshold: 0.95,
             semantic_weight: 0.7,
+            engine: "hybrid".to_string(),
+            pii_redaction: true,
+            quantization: "float32".to_string(),
         }
     }
 }
@@ -372,6 +507,9 @@ pub struct SafetyConfig {
     pub credit_card_redaction: bool,
     /// Enable SSN (Social Security Number) redaction.
     pub ssn_redaction: bool,
+    /// Enable phone number redaction.
+    #[serde(default = "default_true")]
+    pub phone_redaction: bool,
     /// Custom substring patterns to deny (content containing these is blocked entirely).
     pub custom_deny_patterns: Vec<String>,
 }
@@ -385,6 +523,7 @@ impl SafetyConfig {
                 | "safety.pii_detection"
                 | "safety.credit_card_redaction"
                 | "safety.ssn_redaction"
+                | "safety.phone_redaction"
                 | "safety.custom_deny_patterns"
         )
     }
@@ -396,6 +535,7 @@ impl Default for SafetyConfig {
             pii_detection: true,
             credit_card_redaction: true,
             ssn_redaction: true,
+            phone_redaction: true,
             custom_deny_patterns: Vec::new(),
         }
     }
@@ -817,6 +957,7 @@ cold_format = "binary"
         assert!(SafetyConfig::is_protected_field("safety.pii_detection"));
         assert!(SafetyConfig::is_protected_field("safety.credit_card_redaction"));
         assert!(SafetyConfig::is_protected_field("safety.ssn_redaction"));
+        assert!(SafetyConfig::is_protected_field("safety.phone_redaction"));
         assert!(SafetyConfig::is_protected_field("safety.custom_deny_patterns"));
     }
 
@@ -840,5 +981,178 @@ cold_format = "binary"
         let update = serde_json::json!({ "screen": { "fps": 2.0 } });
         let result = EngramConfig::validate_update(&update);
         assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Phase 3 M0: New field defaults
+    // =========================================================================
+
+    #[test]
+    fn test_general_new_field_defaults() {
+        let g = GeneralConfig::default();
+        assert_eq!(g.port, 3030);
+        assert!(!g.start_on_boot);
+        assert!(g.minimize_to_tray);
+    }
+
+    #[test]
+    fn test_screen_new_field_defaults() {
+        let s = ScreenConfig::default();
+        assert!(s.enabled);
+        assert_eq!(s.screenshot_quality, 80);
+        assert!(s.capture_unfocused);
+    }
+
+    #[test]
+    fn test_audio_new_field_defaults() {
+        let a = AudioConfig::default();
+        assert!(a.source_device.is_none());
+        assert_eq!(a.virtual_device_name, "Engram Mic");
+        assert_eq!(a.transcription_engine, "whisper");
+        assert_eq!(a.language, "auto");
+        assert!(!a.store_audio_files);
+        assert_eq!(a.audio_retention_days, 7);
+    }
+
+    #[test]
+    fn test_dictation_new_field_defaults() {
+        let d = DictationConfig::default();
+        assert!(d.enabled);
+        assert!(d.show_overlay);
+        assert!(d.store_dictation);
+        assert_eq!(d.transcription_engine, "whisper");
+        assert_eq!(d.language, "auto");
+    }
+
+    #[test]
+    fn test_search_new_field_defaults() {
+        let s = SearchConfig::default();
+        assert_eq!(s.engine, "hybrid");
+        assert!(s.pii_redaction);
+        assert_eq!(s.quantization, "float32");
+    }
+
+    #[test]
+    fn test_tray_new_field_defaults() {
+        let t = TrayConfig::default();
+        assert_eq!(t.panel_width, 400);
+        assert_eq!(t.panel_height, 500);
+        assert_eq!(t.recent_items, 10);
+        assert!(t.show_stats);
+        assert!(t.quick_search);
+    }
+
+    #[test]
+    fn test_safety_new_field_defaults() {
+        let s = SafetyConfig::default();
+        assert!(s.phone_redaction);
+    }
+
+    #[test]
+    fn test_backward_compat_old_config_loads() {
+        // A config without any Phase 3 fields should load fine with defaults.
+        let content = r#"
+[general]
+data_dir = "/old/data"
+log_level = "warn"
+autostart = false
+
+[screen]
+fps = 0.5
+
+[audio]
+enabled = false
+
+[safety]
+pii_detection = true
+credit_card_redaction = true
+ssn_redaction = true
+"#;
+        let file = create_temp_config(content);
+        let config = EngramConfig::load(file.path()).unwrap();
+
+        // Old fields preserved
+        assert_eq!(config.general.data_dir, "/old/data");
+        assert!(!config.audio.enabled);
+
+        // New fields get defaults
+        assert_eq!(config.general.port, 3030);
+        assert!(!config.general.start_on_boot);
+        assert!(config.general.minimize_to_tray);
+        assert!(config.screen.enabled);
+        assert_eq!(config.screen.screenshot_quality, 80);
+        assert!(config.screen.capture_unfocused);
+        assert!(config.audio.source_device.is_none());
+        assert_eq!(config.audio.virtual_device_name, "Engram Mic");
+        assert!(config.dictation.enabled);
+        assert_eq!(config.search.engine, "hybrid");
+        assert_eq!(config.tray.panel_width, 400);
+        assert!(config.safety.phone_redaction);
+    }
+
+    #[test]
+    fn test_new_fields_roundtrip() {
+        let mut config = EngramConfig::default();
+        config.general.port = 8080;
+        config.general.start_on_boot = true;
+        config.general.minimize_to_tray = false;
+        config.screen.enabled = false;
+        config.screen.screenshot_quality = 50;
+        config.screen.capture_unfocused = false;
+        config.audio.source_device = Some("Microphone (USB)".to_string());
+        config.audio.virtual_device_name = "Custom Mic".to_string();
+        config.audio.transcription_engine = "deepgram".to_string();
+        config.audio.language = "en".to_string();
+        config.audio.store_audio_files = true;
+        config.audio.audio_retention_days = 30;
+        config.dictation.enabled = false;
+        config.dictation.show_overlay = false;
+        config.dictation.store_dictation = false;
+        config.dictation.transcription_engine = "deepgram".to_string();
+        config.dictation.language = "fr".to_string();
+        config.search.engine = "semantic".to_string();
+        config.search.pii_redaction = false;
+        config.search.quantization = "int8".to_string();
+        config.tray.panel_width = 600;
+        config.tray.panel_height = 800;
+        config.tray.recent_items = 25;
+        config.tray.show_stats = false;
+        config.tray.quick_search = false;
+        config.safety.phone_redaction = false;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        config.save(&path).unwrap();
+
+        let reloaded = EngramConfig::load(&path).unwrap();
+        assert_eq!(reloaded.general.port, 8080);
+        assert!(reloaded.general.start_on_boot);
+        assert!(!reloaded.general.minimize_to_tray);
+        assert!(!reloaded.screen.enabled);
+        assert_eq!(reloaded.screen.screenshot_quality, 50);
+        assert!(!reloaded.screen.capture_unfocused);
+        assert_eq!(
+            reloaded.audio.source_device,
+            Some("Microphone (USB)".to_string())
+        );
+        assert_eq!(reloaded.audio.virtual_device_name, "Custom Mic");
+        assert_eq!(reloaded.audio.transcription_engine, "deepgram");
+        assert_eq!(reloaded.audio.language, "en");
+        assert!(reloaded.audio.store_audio_files);
+        assert_eq!(reloaded.audio.audio_retention_days, 30);
+        assert!(!reloaded.dictation.enabled);
+        assert!(!reloaded.dictation.show_overlay);
+        assert!(!reloaded.dictation.store_dictation);
+        assert_eq!(reloaded.dictation.transcription_engine, "deepgram");
+        assert_eq!(reloaded.dictation.language, "fr");
+        assert_eq!(reloaded.search.engine, "semantic");
+        assert!(!reloaded.search.pii_redaction);
+        assert_eq!(reloaded.search.quantization, "int8");
+        assert_eq!(reloaded.tray.panel_width, 600);
+        assert_eq!(reloaded.tray.panel_height, 800);
+        assert_eq!(reloaded.tray.recent_items, 25);
+        assert!(!reloaded.tray.show_stats);
+        assert!(!reloaded.tray.quick_search);
+        assert!(!reloaded.safety.phone_redaction);
     }
 }

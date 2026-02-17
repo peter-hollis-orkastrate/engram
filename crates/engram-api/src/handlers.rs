@@ -187,7 +187,7 @@ pub async fn search(
         ));
     }
 
-    let limit = params.limit.unwrap_or(20).min(100).max(1);
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let offset = params.offset.unwrap_or(0);
 
     // Validate content_type if provided.
@@ -302,7 +302,7 @@ pub async fn recent(
     State(state): State<AppState>,
     Query(params): Query<RecentParams>,
 ) -> Result<Json<PaginatedResults>, ApiError> {
-    let limit = params.limit.unwrap_or(20).min(100).max(1);
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let ct = params.content_type.as_deref();
 
     let rows = state.query_service.recent(limit, ct).map_err(ApiError::from)?;
@@ -436,7 +436,7 @@ pub async fn dictation_history(
     State(state): State<AppState>,
     Query(params): Query<DictationHistoryParams>,
 ) -> Result<Json<DictationHistoryResponse>, ApiError> {
-    let limit = params.limit.unwrap_or(20).min(100).max(1);
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let repo = DictationRepository::new(Arc::clone(&state.database));
 
     let entries = if let Some(app) = &params.app {

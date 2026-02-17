@@ -1,21 +1,26 @@
 //! Engram application binary - composition root.
 //!
 //! Ties together all Engram crates into a single executable:
-//! 1. Load configuration from TOML
-//! 2. Initialize storage (SQLite + HNSW vector index)
-//! 3. Build the ingestion pipeline (safety -> dedup -> embed -> store)
-//! 4. Start background capture loops (screen + OCR, audio, dictation)
-//! 5. Start the axum REST API server
+//! 1. Parse CLI arguments
+//! 2. Load configuration from TOML (with CLI overrides)
+//! 3. Initialize storage (SQLite + HNSW vector index)
+//! 4. Build the ingestion pipeline (safety -> dedup -> embed -> store)
+//! 5. Start background capture loops (screen + OCR, audio, dictation)
+//! 6. Start the axum REST API server
 //!
 //! On Windows, this binary also manages:
 //! - Screen capture and OCR (via engram-capture + engram-ocr)
 //! - Audio capture (via engram-audio)
 //! - Dictation hotkey listener (via engram-dictation)
 
+mod cli;
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+
+use clap::Parser;
 
 use engram_core::config::EngramConfig;
 use engram_storage::Database;
@@ -111,7 +116,6 @@ async fn audio_capture_loop(
     {
         tracing::info!("Audio capture requires Windows WASAPI — skipping on this platform");
         let _ = (&pipeline, &audio_active); // suppress unused warnings
-        return;
     }
 
     #[cfg(target_os = "windows")]
@@ -248,7 +252,6 @@ async fn dictation_listener(
     {
         tracing::info!("Dictation hotkey requires Windows — skipping on this platform");
         let _ = (&engine, &pipeline); // suppress unused warnings
-        return;
     }
 
     #[cfg(target_os = "windows")]
@@ -401,38 +404,52 @@ fn resolve_data_dir(data_dir: &str) -> std::path::PathBuf {
     }
 }
 
-/// Resolve the config file path (ENGRAM_CONFIG env, or ~/.engram/config.toml).
-fn config_path() -> PathBuf {
-    if let Ok(p) = std::env::var("ENGRAM_CONFIG") {
-        return PathBuf::from(p);
-    }
-    #[cfg(target_os = "windows")]
-    if let Ok(home) = std::env::var("USERPROFILE") {
-        return PathBuf::from(home).join(".engram").join("config.toml");
-    }
-    #[cfg(not(target_os = "windows"))]
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".engram").join("config.toml");
-    }
-    PathBuf::from("config.toml")
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Tracing.
+    // Parse CLI arguments first (before tracing, so --log-level can influence it).
+    let cli_args = cli::CliArgs::parse();
+
+    // Resolve config file path: --config > ENGRAM_CONFIG env > default.
+    let config_file = cli_args.resolve_config_path();
+
+    // If --config was explicitly provided, the file must exist.
+    if cli_args.config.is_some() && !config_file.exists() {
+        eprintln!(
+            "Error: config file not found: {}",
+            config_file.display()
+        );
+        std::process::exit(1);
+    }
+
+    // Load config from file (or defaults).
+    let mut config = EngramConfig::load_or_default(&config_file);
+
+    // Apply CLI overrides (CLI > env > config > defaults).
+    if let Some(ref dir) = cli_args.resolve_data_dir() {
+        config.general.data_dir = dir.clone();
+    }
+    if let Some(ref level) = cli_args.resolve_log_level() {
+        config.general.log_level = level.clone();
+    }
+    // Store the resolved port in config for downstream use.
+    config.general.port = cli_args.resolve_port(config.general.port);
+
+    // Tracing — use the resolved log level.
+    let log_filter = &config.general.log_level;
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_filter)),
         )
         .init();
 
     let app_start_time = Instant::now();
     tracing::info!("Starting Engram v{}", env!("CARGO_PKG_VERSION"));
 
-    // Config.
-    let config_file = config_path();
-    let config = EngramConfig::load_or_default(&config_file);
+    if cli_args.headless {
+        tracing::info!("Running in headless mode (no system tray UI)");
+    }
+
     tracing::info!(path = %config_file.display(), "Configuration loaded");
 
     // Storage.
@@ -590,10 +607,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // === API server ===
 
-    let port = std::env::var("ENGRAM_PORT")
-        .ok()
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(3030);
+    let port = config.general.port;
     let addr = format!("127.0.0.1:{}", port);
 
     let router = routes::create_router(state);

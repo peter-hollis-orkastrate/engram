@@ -227,7 +227,7 @@ impl EngramPipeline {
         let embedding = self.embedder.embed_boxed(&safe_text).await?;
 
         // Step 3: Check for duplicates.
-        if self.index.len() > 0 {
+        if !self.index.is_empty() {
             let hits = self.index.search(&embedding, 1)?;
             if let Some(top_hit) = hits.first() {
                 if top_hit.score >= self.dedup_threshold {
@@ -516,6 +516,7 @@ mod tests {
             pii_detection: false,
             credit_card_redaction: false,
             ssn_redaction: false,
+            phone_redaction: false,
             custom_deny_patterns: vec![],
         };
         let pipeline = make_pipeline_with_safety(config);

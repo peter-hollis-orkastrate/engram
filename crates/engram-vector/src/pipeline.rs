@@ -16,7 +16,7 @@ use engram_core::types::{AudioChunk, DictationEntry, ScreenFrame};
 
 use engram_storage::{AudioRepository, CaptureRepository, Database, DictationRepository};
 
-use crate::embedding::EmbeddingService;
+use crate::embedding::{DynEmbeddingService, EmbeddingService};
 use crate::index::VectorIndex;
 
 /// Result of an ingestion attempt.
@@ -42,28 +42,31 @@ pub enum IngestResult {
 /// 3. Deduplication via cosine similarity
 /// 4. Embedding generation
 /// 5. Vector index insertion
-pub struct EngramPipeline<E: EmbeddingService> {
+///
+/// Uses dynamic dispatch (`Box<dyn DynEmbeddingService>`) so that production
+/// code can supply `OnnxEmbeddingService` while tests use `MockEmbedding`.
+pub struct EngramPipeline {
     index: Arc<VectorIndex>,
-    embedder: E,
+    embedder: Box<dyn DynEmbeddingService>,
     safety_gate: SafetyGate,
     dedup_threshold: f64,
     database: Option<Arc<Database>>,
 }
 
-impl<E: EmbeddingService> EngramPipeline<E> {
+impl EngramPipeline {
     /// Create a new pipeline with a shared index, embedder, safety config, and dedup threshold.
     ///
     /// The `dedup_threshold` controls the cosine similarity threshold above which
     /// an entry is considered a duplicate. Default is 0.95.
     pub fn new(
         index: Arc<VectorIndex>,
-        embedder: E,
+        embedder: impl EmbeddingService + 'static,
         safety_config: SafetyConfig,
         dedup_threshold: f64,
     ) -> Self {
         Self {
             index,
-            embedder,
+            embedder: Box::new(embedder),
             safety_gate: SafetyGate::new(safety_config),
             dedup_threshold,
             database: None,
@@ -71,7 +74,7 @@ impl<E: EmbeddingService> EngramPipeline<E> {
     }
 
     /// Create a new pipeline with the default safety config and dedup threshold of 0.95.
-    pub fn with_defaults(index: Arc<VectorIndex>, embedder: E) -> Self {
+    pub fn with_defaults(index: Arc<VectorIndex>, embedder: impl EmbeddingService + 'static) -> Self {
         Self::new(index, embedder, SafetyConfig::default(), 0.95)
     }
 
@@ -205,7 +208,7 @@ impl<E: EmbeddingService> EngramPipeline<E> {
         };
 
         // Step 2: Generate embedding from the (possibly redacted) text.
-        let embedding = self.embedder.embed(&safe_text).await?;
+        let embedding = self.embedder.embed_boxed(&safe_text).await?;
 
         // Step 3: Check for duplicates.
         if self.index.len() > 0 {
@@ -263,11 +266,11 @@ mod tests {
     use chrono::Utc;
     use engram_core::types::{ContentType, DictationMode};
 
-    fn make_pipeline() -> EngramPipeline<MockEmbedding> {
+    fn make_pipeline() -> EngramPipeline {
         EngramPipeline::with_defaults(Arc::new(VectorIndex::new()), MockEmbedding::new())
     }
 
-    fn make_pipeline_with_safety(config: SafetyConfig) -> EngramPipeline<MockEmbedding> {
+    fn make_pipeline_with_safety(config: SafetyConfig) -> EngramPipeline {
         EngramPipeline::new(Arc::new(VectorIndex::new()), MockEmbedding::new(), config, 0.95)
     }
 
@@ -509,7 +512,7 @@ mod tests {
 
     // -- Dual-write (vector + SQLite) tests --
 
-    fn make_pipeline_with_db() -> (EngramPipeline<MockEmbedding>, Arc<Database>) {
+    fn make_pipeline_with_db() -> (EngramPipeline, Arc<Database>) {
         let db = Arc::new(Database::in_memory().unwrap());
         let pipeline = EngramPipeline::with_defaults(Arc::new(VectorIndex::new()), MockEmbedding::new())
             .with_database(Arc::clone(&db));

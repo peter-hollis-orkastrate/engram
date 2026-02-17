@@ -94,6 +94,10 @@ pub struct GeneralConfig {
     pub log_level: String,
     /// Whether to start Engram on system boot.
     pub autostart: bool,
+    /// Directory containing ONNX embedding model files (model.onnx + tokenizer.json).
+    /// If empty or not set, will look in {data_dir}/models/
+    #[serde(default)]
+    pub embedding_model_dir: String,
 }
 
 impl Default for GeneralConfig {
@@ -102,6 +106,7 @@ impl Default for GeneralConfig {
             data_dir: "~/.engram/data".to_string(),
             log_level: "info".to_string(),
             autostart: true,
+            embedding_model_dir: String::new(),
         }
     }
 }

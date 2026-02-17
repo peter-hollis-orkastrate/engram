@@ -53,16 +53,23 @@ impl DictationSession {
     }
 }
 
+/// A function that transcribes audio samples to text.
+///
+/// Takes `(samples, sample_rate)` and returns the transcribed string or an error.
+/// The samples are raw PCM f32 values and the sample rate is typically 16000 Hz.
+pub type TranscriptionFn = Box<dyn Fn(&[f32], u32) -> Result<String, EngramError> + Send + Sync>;
+
 /// The dictation engine manages state transitions and session lifecycle.
 ///
 /// It wraps a thread-safe `StateMachine` and an optional active `DictationSession`.
 /// External callers drive the engine through `start_dictation`, `stop_dictation`,
 /// and `cancel_dictation` methods. The engine ensures all transitions are valid
 /// before proceeding.
-#[derive(Debug)]
 pub struct DictationEngine {
     state_machine: StateMachine,
     session: std::sync::Mutex<Option<DictationSession>>,
+    /// Optional transcription function. If `None`, `stop_dictation` returns placeholder text.
+    transcription_fn: Option<TranscriptionFn>,
 }
 
 impl Default for DictationEngine {
@@ -71,12 +78,37 @@ impl Default for DictationEngine {
     }
 }
 
+impl std::fmt::Debug for DictationEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DictationEngine")
+            .field("state_machine", &self.state_machine)
+            .field("session", &self.session)
+            .field("has_transcription_fn", &self.transcription_fn.is_some())
+            .finish()
+    }
+}
+
 impl DictationEngine {
-    /// Create a new `DictationEngine` in the Idle state.
+    /// Create a new `DictationEngine` in the Idle state with no transcription service.
+    ///
+    /// When no transcription function is configured, `stop_dictation` returns placeholder text.
     pub fn new() -> Self {
         Self {
             state_machine: StateMachine::new(),
             session: std::sync::Mutex::new(None),
+            transcription_fn: None,
+        }
+    }
+
+    /// Create a `DictationEngine` with a real transcription service.
+    ///
+    /// The provided function will be called with `(audio_samples, sample_rate)` during
+    /// `stop_dictation` to produce actual transcribed text.
+    pub fn with_transcription(transcription_fn: TranscriptionFn) -> Self {
+        Self {
+            state_machine: StateMachine::new(),
+            session: std::sync::Mutex::new(None),
+            transcription_fn: Some(transcription_fn),
         }
     }
 
@@ -109,7 +141,7 @@ impl DictationEngine {
             "Dictation session started"
         );
 
-        let mut guard = self.session.lock().expect("session mutex poisoned");
+        let mut guard = self.session.lock().map_err(|e| EngramError::Dictation(format!("Session mutex poisoned: {}", e)))?;
         *guard = Some(session);
         Ok(())
     }
@@ -126,7 +158,7 @@ impl DictationEngine {
             .transition(DictationState::Processing)?;
 
         let session_info = {
-            let guard = self.session.lock().expect("session mutex poisoned");
+            let guard = self.session.lock().map_err(|e| EngramError::Dictation(format!("Session mutex poisoned: {}", e)))?;
             guard.as_ref().map(|s| {
                 (
                     s.id,
@@ -145,13 +177,44 @@ impl DictationEngine {
                 "Processing dictation audio"
             );
 
-            // In a full implementation, this is where we would call the transcription
-            // service. For now, return a placeholder if there is audio data.
             if buffer_len > 0 {
-                Some(format!(
-                    "[dictation from {} - {:.1}s of audio]",
-                    target_app, elapsed
-                ))
+                // Get the actual audio buffer for transcription.
+                let audio_buffer = {
+                    let guard = self.session.lock().map_err(|e| {
+                        EngramError::Dictation(format!("Session mutex poisoned: {}", e))
+                    })?;
+                    guard
+                        .as_ref()
+                        .map(|s| s.audio_buffer.clone())
+                        .unwrap_or_default()
+                };
+
+                if let Some(ref transcribe) = self.transcription_fn {
+                    // Use the configured transcription service.
+                    match transcribe(&audio_buffer, 16000) {
+                        Ok(text) if !text.trim().is_empty() => {
+                            tracing::info!(text_len = text.len(), "Dictation transcribed");
+                            Some(text)
+                        }
+                        Ok(_) => {
+                            tracing::debug!("Transcription returned empty text");
+                            None
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Transcription failed, returning placeholder");
+                            Some(format!(
+                                "[dictation from {} - {:.1}s of audio, transcription failed]",
+                                target_app, elapsed
+                            ))
+                        }
+                    }
+                } else {
+                    // Placeholder when no transcription service is configured.
+                    Some(format!(
+                        "[dictation from {} - {:.1}s of audio]",
+                        target_app, elapsed
+                    ))
+                }
             } else {
                 None
             }
@@ -172,7 +235,7 @@ impl DictationEngine {
             .transition(DictationState::Idle)?;
 
         // Clear the session
-        let mut guard = self.session.lock().expect("session mutex poisoned");
+        let mut guard = self.session.lock().map_err(|e| EngramError::Dictation(format!("Session mutex poisoned: {}", e)))?;
         *guard = None;
 
         Ok(text)
@@ -195,7 +258,7 @@ impl DictationEngine {
             .transition(DictationState::Idle)?;
 
         let session_id = {
-            let mut guard = self.session.lock().expect("session mutex poisoned");
+            let mut guard = self.session.lock().map_err(|e| EngramError::Dictation(format!("Session mutex poisoned: {}", e)))?;
             let id = guard.as_ref().map(|s| s.id);
             *guard = None;
             id
@@ -218,7 +281,7 @@ impl DictationEngine {
             ));
         }
 
-        let mut guard = self.session.lock().expect("session mutex poisoned");
+        let mut guard = self.session.lock().map_err(|e| EngramError::Dictation(format!("Session mutex poisoned: {}", e)))?;
         if let Some(ref mut session) = *guard {
             session.push_audio(samples);
             Ok(())
@@ -230,9 +293,9 @@ impl DictationEngine {
     }
 
     /// Returns a clone of the current session, if one is active.
-    pub fn current_session(&self) -> Option<DictationSession> {
-        let guard = self.session.lock().expect("session mutex poisoned");
-        guard.clone()
+    pub fn current_session(&self) -> Result<Option<DictationSession>, EngramError> {
+        let guard = self.session.lock().map_err(|e| EngramError::Dictation(format!("Session mutex poisoned: {}", e)))?;
+        Ok(guard.clone())
     }
 }
 
@@ -289,7 +352,7 @@ mod tests {
     fn test_engine_initial_state() {
         let engine = DictationEngine::new();
         assert_eq!(engine.current_state(), DictationState::Idle);
-        assert!(engine.current_session().is_none());
+        assert!(engine.current_session().unwrap().is_none());
     }
 
     #[test]
@@ -305,7 +368,7 @@ mod tests {
 
         assert_eq!(engine.current_state(), DictationState::Listening);
 
-        let session = engine.current_session().unwrap();
+        let session = engine.current_session().unwrap().unwrap();
         assert_eq!(session.target_app, "Chrome");
         assert_eq!(session.target_window, "Google");
     }
@@ -331,7 +394,7 @@ mod tests {
         let result = engine.stop_dictation().unwrap();
         assert!(result.is_some());
         assert_eq!(engine.current_state(), DictationState::Idle);
-        assert!(engine.current_session().is_none());
+        assert!(engine.current_session().unwrap().is_none());
     }
 
     #[test]
@@ -349,7 +412,7 @@ mod tests {
 
         engine.cancel_dictation().unwrap();
         assert_eq!(engine.current_state(), DictationState::Idle);
-        assert!(engine.current_session().is_none());
+        assert!(engine.current_session().unwrap().is_none());
     }
 
     #[test]
@@ -466,7 +529,7 @@ mod tests {
             .unwrap();
         assert_eq!(engine.current_state(), DictationState::Listening);
 
-        let session = engine.current_session().unwrap();
+        let session = engine.current_session().unwrap().unwrap();
         assert_eq!(session.target_app, "App2");
         assert_eq!(session.mode, DictationMode::Clipboard);
     }
@@ -486,5 +549,121 @@ mod tests {
             );
             assert_eq!(session.mode, mode);
         }
+    }
+
+    #[test]
+    fn test_with_transcription_success() {
+        let engine = DictationEngine::with_transcription(Box::new(|_samples, _rate| {
+            Ok("Hello world".to_string())
+        }));
+
+        engine
+            .start_dictation(
+                "App".to_string(),
+                "Win".to_string(),
+                DictationMode::TypeAndStore,
+            )
+            .unwrap();
+        engine.push_audio(&[0.1, 0.2, 0.3]).unwrap();
+
+        let result = engine.stop_dictation().unwrap();
+        assert_eq!(result, Some("Hello world".to_string()));
+    }
+
+    #[test]
+    fn test_with_transcription_empty_returns_none() {
+        let engine = DictationEngine::with_transcription(Box::new(|_samples, _rate| {
+            Ok("   ".to_string())
+        }));
+
+        engine
+            .start_dictation(
+                "App".to_string(),
+                "Win".to_string(),
+                DictationMode::Type,
+            )
+            .unwrap();
+        engine.push_audio(&[0.1]).unwrap();
+
+        let result = engine.stop_dictation().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_with_transcription_error_returns_placeholder() {
+        let engine = DictationEngine::with_transcription(Box::new(|_samples, _rate| {
+            Err(EngramError::Dictation("Whisper failed".to_string()))
+        }));
+
+        engine
+            .start_dictation(
+                "App".to_string(),
+                "Win".to_string(),
+                DictationMode::TypeAndStore,
+            )
+            .unwrap();
+        engine.push_audio(&[0.5; 100]).unwrap();
+
+        let result = engine.stop_dictation().unwrap();
+        assert!(result.is_some());
+        let text = result.unwrap();
+        assert!(text.contains("transcription failed"));
+        assert!(text.contains("App"));
+    }
+
+    #[test]
+    fn test_without_transcription_returns_placeholder() {
+        // DictationEngine::new() has no transcription_fn — should still work.
+        let engine = DictationEngine::new();
+
+        engine
+            .start_dictation(
+                "Notepad".to_string(),
+                "Untitled".to_string(),
+                DictationMode::TypeAndStore,
+            )
+            .unwrap();
+        engine.push_audio(&[0.1, 0.2]).unwrap();
+
+        let result = engine.stop_dictation().unwrap();
+        assert!(result.is_some());
+        let text = result.unwrap();
+        assert!(text.contains("Notepad"));
+        assert!(text.contains("audio"));
+        // Should NOT contain "transcription failed"
+        assert!(!text.contains("transcription failed"));
+    }
+
+    #[test]
+    fn test_with_transcription_receives_correct_samples() {
+        use std::sync::{Arc, Mutex};
+
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let captured_clone = Arc::clone(&captured);
+
+        let engine = DictationEngine::with_transcription(Box::new(move |samples, rate| {
+            captured_clone
+                .lock()
+                .unwrap()
+                .push((samples.to_vec(), rate));
+            Ok("transcribed".to_string())
+        }));
+
+        engine
+            .start_dictation(
+                "App".to_string(),
+                "Win".to_string(),
+                DictationMode::Type,
+            )
+            .unwrap();
+        engine.push_audio(&[0.1, 0.2, 0.3]).unwrap();
+        engine.push_audio(&[0.4, 0.5]).unwrap();
+
+        let _ = engine.stop_dictation().unwrap();
+
+        let calls = captured.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, vec![0.1, 0.2, 0.3, 0.4, 0.5]);
+        assert_eq!(calls[0].1, 16000);
     }
 }

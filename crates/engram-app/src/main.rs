@@ -12,7 +12,8 @@
 //! - Audio capture (via engram-audio)
 //! - Dictation hotkey listener (via engram-dictation)
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use engram_core::config::EngramConfig;
@@ -28,7 +29,7 @@ use engram_ocr::{OcrConfig, OcrService, WindowsOcrService};
 
 /// Run the screen capture + OCR loop as a background task.
 async fn screen_capture_loop(
-    pipeline: Arc<EngramPipeline<MockEmbedding>>,
+    pipeline: Arc<EngramPipeline>,
     interval_secs: u64,
     capture_config: CaptureConfig,
 ) {
@@ -80,9 +81,10 @@ async fn screen_capture_loop(
 
 /// Run the audio capture loop as a background task.
 async fn audio_capture_loop(
-    _pipeline: Arc<EngramPipeline<MockEmbedding>>,
+    pipeline: Arc<EngramPipeline>,
     enabled: bool,
     chunk_secs: u64,
+    audio_active: Arc<AtomicBool>,
 ) {
     if !enabled {
         tracing::info!("Audio capture disabled in config");
@@ -94,12 +96,18 @@ async fn audio_capture_loop(
     #[cfg(not(target_os = "windows"))]
     {
         tracing::info!("Audio capture requires Windows WASAPI — skipping on this platform");
+        let _ = (&pipeline, &audio_active); // suppress unused warnings
         return;
     }
 
     #[cfg(target_os = "windows")]
     {
-        use engram_audio::{AudioCaptureService, AudioConfig as WinAudioConfig, WindowsAudioService};
+        use engram_audio::{
+            AudioCaptureService, AudioConfig as WinAudioConfig, VoiceActivityDetector,
+            WindowsAudioService, SileroVad, SileroVadConfig, VadResult,
+        };
+        use engram_whisper::{TranscriptionService, WhisperConfig};
+        use engram_whisper::whisper_service::WhisperService;
 
         let audio_service = WindowsAudioService::new(WinAudioConfig::default());
 
@@ -108,33 +116,131 @@ async fn audio_capture_loop(
             return;
         }
 
+        // Signal that audio capture is active.
+        audio_active.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // Initialize VAD (if model available).
+        let vad = match SileroVad::new(SileroVadConfig::default()) {
+            Ok(v) => {
+                tracing::info!("Silero VAD initialized");
+                Some(v)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "VAD unavailable — processing all audio chunks");
+                None
+            }
+        };
+
+        // Initialize Whisper (if model available).
+        let whisper = match WhisperService::new(WhisperConfig::default()) {
+            Ok(w) => {
+                tracing::info!("Whisper transcription service initialized");
+                w
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Whisper unavailable — audio transcription disabled");
+                return;
+            }
+        };
+
+        let sample_rate = audio_service.config().sample_rate;
+        let mut speech_buffer: Vec<f32> = Vec::new();
+
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(chunk_secs));
         loop {
             interval.tick().await;
-            // Full flow: read buffer -> VAD -> Whisper transcribe -> pipeline.ingest_audio()
-            tracing::debug!("Audio tick — active: {}", audio_service.is_active());
+
+            // Step 1: Drain the audio buffer accumulated since last tick.
+            let samples = audio_service.buffer().take();
+            if samples.is_empty() {
+                tracing::debug!("Audio tick — no samples buffered");
+                continue;
+            }
+
+            // Step 2: Voice Activity Detection.
+            let is_speech = if let Some(ref vad) = vad {
+                match vad.detect(&samples) {
+                    VadResult::Speech => true,
+                    VadResult::Silence => false,
+                    VadResult::Unknown => true, // Treat unknown as speech to avoid dropping data.
+                }
+            } else {
+                true // No VAD available — process everything.
+            };
+
+            if is_speech {
+                speech_buffer.extend_from_slice(&samples);
+            } else if !speech_buffer.is_empty() {
+                // End of speech segment — transcribe the accumulated buffer.
+                let buffer = std::mem::take(&mut speech_buffer);
+                let duration_secs = buffer.len() as f32 / sample_rate as f32;
+
+                // Step 3: Whisper transcription.
+                match whisper.transcribe(&buffer, sample_rate).await {
+                    Ok(result) if !result.text.trim().is_empty() => {
+                        tracing::debug!(
+                            text_len = result.text.len(),
+                            segments = result.segments.len(),
+                            "Audio transcribed"
+                        );
+
+                        // Compute average confidence from segments.
+                        let confidence = if result.segments.is_empty() {
+                            0.0f32
+                        } else {
+                            result.segments.iter().map(|s| s.confidence).sum::<f32>()
+                                / result.segments.len() as f32
+                        };
+
+                        // Step 4: Create AudioChunk and ingest into pipeline.
+                        let chunk = engram_core::types::AudioChunk {
+                            id: uuid::Uuid::new_v4(),
+                            content_type: engram_core::types::ContentType::Audio,
+                            timestamp: chrono::Utc::now(),
+                            duration_secs,
+                            transcription: result.text,
+                            speaker: "unknown".to_string(),
+                            source_device: "default".to_string(),
+                            app_in_focus: "unknown".to_string(),
+                            confidence,
+                        };
+
+                        match pipeline.ingest_audio(chunk).await {
+                            Ok(ingest_result) => {
+                                tracing::debug!(result = ?ingest_result, "Audio chunk ingested")
+                            }
+                            Err(e) => tracing::warn!(error = %e, "Audio ingest failed"),
+                        }
+                    }
+                    Ok(_) => {} // Empty transcription — skip.
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Whisper transcription failed");
+                    }
+                }
+            }
         }
     }
 }
 
 /// Start the dictation hotkey listener as a background task.
-async fn dictation_listener(hotkey: String) {
+async fn dictation_listener(hotkey: String, engine: Arc<engram_dictation::DictationEngine>) {
     tracing::info!(hotkey = %hotkey, "Dictation listener started");
 
     #[cfg(not(target_os = "windows"))]
     {
         tracing::info!("Dictation hotkey requires Windows — skipping on this platform");
+        let _ = &engine; // suppress unused warning
         return;
     }
 
     #[cfg(target_os = "windows")]
     {
-        use engram_dictation::{DictationEngine, HotkeyConfig, HotkeyService};
+        use engram_dictation::{HotkeyConfig, HotkeyService};
+        use engram_core::types::DictationMode;
 
         // HotkeyService contains a raw pointer (!Send), so run on a blocking thread.
         let _ = tokio::task::spawn_blocking(move || {
-            let _engine = DictationEngine::new();
-            let _hotkey_service = match HotkeyService::new(HotkeyConfig { key: hotkey }) {
+            let hotkey_service = match HotkeyService::new(HotkeyConfig { key: hotkey }) {
                 Ok(s) => {
                     tracing::info!("Dictation hotkey registered");
                     s
@@ -144,12 +250,63 @@ async fn dictation_listener(hotkey: String) {
                     return;
                 }
             };
-            // Keep the thread alive so the hotkey stays registered.
+
+            // Poll for hotkey presses and toggle dictation on/off.
+            let mut is_dictating = false;
             loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                if hotkey_service.was_pressed() {
+                    if is_dictating {
+                        // Stop dictation and retrieve transcribed text.
+                        match engine.stop_dictation() {
+                            Ok(Some(text)) => {
+                                tracing::info!(text_len = text.len(), "Dictation complete");
+                                // TODO: inject text into focused application via TextInjector
+                            }
+                            Ok(None) => {
+                                tracing::debug!("Dictation stopped with no text");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Failed to stop dictation");
+                            }
+                        }
+                        is_dictating = false;
+                    } else {
+                        // Start dictation for the currently focused application.
+                        // TODO: detect the actual focused app and window title
+                        let target_app = "unknown".to_string();
+                        let target_window = "unknown".to_string();
+                        match engine.start_dictation(
+                            target_app,
+                            target_window,
+                            DictationMode::TypeAndStore,
+                        ) {
+                            Ok(()) => {
+                                tracing::info!("Dictation started via hotkey");
+                                is_dictating = true;
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Failed to start dictation");
+                            }
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
         })
         .await;
+    }
+}
+
+/// Expand ~ to home directory in a path string.
+fn resolve_data_dir(data_dir: &str) -> std::path::PathBuf {
+    if data_dir.starts_with("~/") || data_dir.starts_with("~\\") {
+        #[cfg(target_os = "windows")]
+        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
+        #[cfg(not(target_os = "windows"))]
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(home).join(&data_dir[2..])
+    } else {
+        std::path::PathBuf::from(data_dir)
     }
 }
 
@@ -187,8 +344,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(path = %config_file.display(), "Configuration loaded");
 
     // Storage.
-    let db_path = Path::new("engram.db");
-    let db = Database::new(db_path)?;
+    let data_dir = resolve_data_dir(&config.general.data_dir);
+
+    // Create data directory if it doesn't exist
+    if let Err(e) = std::fs::create_dir_all(&data_dir) {
+        tracing::error!(path = %data_dir.display(), error = %e, "Failed to create data directory");
+        return Err(e.into());
+    }
+
+    let db_path = data_dir.join("engram.db");
+    let db = Database::new(&db_path)?;
     tracing::info!(path = %db_path.display(), "SQLite database opened");
 
     // Vector index (single shared instance).
@@ -209,20 +374,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Ingestion pipeline ready (dual-write to vector + SQLite)");
 
     // API state uses a separate DB connection (SQLite supports concurrent readers).
-    let api_db = Database::new(db_path)?;
+    let api_db = Database::new(&db_path)?;
     let api_pipeline = EngramPipeline::new(
         Arc::clone(&index),
         MockEmbedding::new(),
         config.safety.clone(),
         config.search.dedup_threshold,
     );
+    // Shared state for audio and dictation control.
+    let audio_active = Arc::new(AtomicBool::new(false));
+    let dictation_engine = Arc::new(engram_dictation::DictationEngine::new());
+
     let state = AppState::with_config_path(
         config.clone(),
         Arc::clone(&index),
         api_db,
         api_pipeline,
         config_file.clone(),
-    );
+    )
+    .with_shared_state(Arc::clone(&audio_active), Arc::clone(&dictation_engine));
 
     // === Background tasks ===
 
@@ -265,14 +435,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pipeline_audio = Arc::clone(&pipeline);
     let audio_enabled = config.audio.enabled;
     let audio_chunk_secs = config.audio.chunk_duration_secs as u64;
+    let audio_active_clone = Arc::clone(&audio_active);
     tokio::spawn(async move {
-        audio_capture_loop(pipeline_audio, audio_enabled, audio_chunk_secs).await;
+        audio_capture_loop(pipeline_audio, audio_enabled, audio_chunk_secs, audio_active_clone).await;
     });
 
     // Dictation hotkey listener.
     let dictation_hotkey = config.dictation.hotkey.clone();
+    let dictation_engine_clone = Arc::clone(&dictation_engine);
     tokio::spawn(async move {
-        dictation_listener(dictation_hotkey).await;
+        dictation_listener(dictation_hotkey, dictation_engine_clone).await;
     });
 
     // === API server ===

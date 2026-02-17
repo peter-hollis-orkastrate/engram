@@ -8,6 +8,7 @@ engram-core = { path = "../engram-core" }
 engram-vector = { path = "../engram-vector" }
 engram-storage = { path = "../engram-storage" }
 engram-ui = { path = "../engram-ui" }
+engram-dictation = { path = "../engram-dictation" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -18,6 +19,8 @@ thiserror = { workspace = true }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+rand = "0.9"
+hex = "0.4"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

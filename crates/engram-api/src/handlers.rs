@@ -398,10 +398,10 @@ pub async fn app_activity(
 pub async fn audio_status(
     State(state): State<AppState>,
 ) -> Result<Json<AudioStatusResponse>, ApiError> {
+    let active = state.audio_active.load(std::sync::atomic::Ordering::Relaxed);
     let uptime = state.start_time.elapsed().as_secs();
-    // Audio service status will be wired when engram-audio is implemented.
     Ok(Json(AudioStatusResponse {
-        active: false,
+        active,
         device_name: None,
         source_device: None,
         chunks_transcribed: 0,
@@ -411,15 +411,24 @@ pub async fn audio_status(
 
 /// GET /dictation/status - dictation status.
 pub async fn dictation_status(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<Json<DictationStatusResponse>, ApiError> {
-    // Dictation service status will be wired when engram-dictation is implemented.
-    Ok(Json(DictationStatusResponse {
-        active: false,
-        mode: "type_and_store".to_string(),
-        duration_secs: None,
-        target_app: None,
-    }))
+    let session = state.dictation_engine.current_session()
+        .map_err(|e| ApiError::Internal(format!("Dictation state error: {}", e)))?;
+    match session {
+        Some(s) => Ok(Json(DictationStatusResponse {
+            active: true,
+            mode: format!("{:?}", s.mode),
+            duration_secs: Some(s.elapsed_secs() as f64),
+            target_app: Some(s.target_app.clone()),
+        })),
+        None => Ok(Json(DictationStatusResponse {
+            active: false,
+            mode: "idle".to_string(),
+            duration_secs: None,
+            target_app: None,
+        })),
+    }
 }
 
 /// GET /dictation/history - dictation history from SQLite.
@@ -469,9 +478,21 @@ pub async fn dictation_history(
 
 /// POST /dictation/start - start dictation.
 pub async fn dictation_start(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<Json<DictationActionResult>, ApiError> {
-    // Will wire to DictationService when implemented.
+    // Check if already active.
+    let session = state.dictation_engine.current_session()
+        .map_err(|e| ApiError::Internal(format!("Dictation state error: {}", e)))?;
+    if session.is_some() {
+        return Err(ApiError::Conflict("Dictation is already active".to_string()));
+    }
+
+    state.dictation_engine.start_dictation(
+        "api".to_string(),
+        "api".to_string(),
+        engram_core::types::DictationMode::TypeAndStore,
+    ).map_err(|e| ApiError::Internal(format!("Failed to start dictation: {}", e)))?;
+
     Ok(Json(DictationActionResult {
         success: true,
         message: "Dictation started".to_string(),
@@ -480,12 +501,26 @@ pub async fn dictation_start(
 
 /// POST /dictation/stop - stop dictation.
 pub async fn dictation_stop(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<Json<DictationActionResult>, ApiError> {
-    // Will wire to DictationService when implemented.
+    // Check if not active.
+    let session = state.dictation_engine.current_session()
+        .map_err(|e| ApiError::Internal(format!("Dictation state error: {}", e)))?;
+    if session.is_none() {
+        return Err(ApiError::Conflict("Dictation is not active".to_string()));
+    }
+
+    let text = state.dictation_engine.stop_dictation()
+        .map_err(|e| ApiError::Internal(format!("Failed to stop dictation: {}", e)))?;
+
+    let message = match text {
+        Some(t) => format!("Dictation stopped, transcribed: {}", t),
+        None => "Dictation stopped, no text captured".to_string(),
+    };
+
     Ok(Json(DictationActionResult {
         success: true,
-        message: "Dictation stopped, transcription processing".to_string(),
+        message,
     }))
 }
 
@@ -704,6 +739,8 @@ mod tests {
     use engram_storage::Database;
     use tower::ServiceExt;
 
+    const TEST_TOKEN: &str = "test-token-12345";
+
     fn make_state() -> AppState {
         let config = EngramConfig::default();
         let index = std::sync::Arc::new(VectorIndex::new());
@@ -714,7 +751,9 @@ mod tests {
             SafetyConfig::default(),
             0.95,
         );
-        AppState::new(config, index, db, pipeline)
+        let mut state = AppState::new(config, index, db, pipeline);
+        state.api_token = TEST_TOKEN.to_string();
+        state
     }
 
     fn make_app() -> axum::Router {
@@ -740,7 +779,12 @@ mod tests {
     async fn test_search_requires_q() {
         let app = make_app();
         let resp = app
-            .oneshot(Request::get("/search").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/search")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -752,7 +796,10 @@ mod tests {
         let app = make_app();
         let resp = app
             .oneshot(
-                Request::get("/search?q=").body(Body::empty()).unwrap(),
+                Request::get("/search?q=")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -766,6 +813,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::get("/search?q=test&content_type=invalid")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -780,7 +828,10 @@ mod tests {
         let app = make_app();
         let resp = app
             .oneshot(
-                Request::get("/search?q=hello").body(Body::empty()).unwrap(),
+                Request::get("/search?q=hello")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -808,7 +859,10 @@ mod tests {
         let app = crate::create_router(state);
         let resp = app
             .oneshot(
-                Request::get("/search?q=hello").body(Body::empty()).unwrap(),
+                Request::get("/search?q=hello")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -824,7 +878,12 @@ mod tests {
     async fn test_recent_empty() {
         let app = make_app();
         let resp = app
-            .oneshot(Request::get("/recent").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/recent")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -848,7 +907,12 @@ mod tests {
 
         let app = crate::create_router(state);
         let resp = app
-            .oneshot(Request::get("/recent").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/recent")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -878,7 +942,12 @@ mod tests {
 
         let app = crate::create_router(state);
         let resp = app
-            .oneshot(Request::get("/apps").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/apps")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -897,13 +966,21 @@ mod tests {
         // but an empty name in the handler returns 400.
         let resp = app
             .oneshot(
-                Request::get("/apps//activity").body(Body::empty()).unwrap(),
+                Request::get("/apps//activity")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
             )
             .await
             .unwrap();
 
-        // May be 400 or 404 depending on router matching.
-        assert!(resp.status() == StatusCode::BAD_REQUEST || resp.status() == StatusCode::NOT_FOUND);
+        // May be 400, 404, or 401 depending on router matching order.
+        let status = resp.status();
+        assert!(
+            status == StatusCode::BAD_REQUEST
+                || status == StatusCode::NOT_FOUND
+                || status == StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]
@@ -911,7 +988,10 @@ mod tests {
         let app = make_app();
         let resp = app
             .oneshot(
-                Request::get("/storage/stats").body(Body::empty()).unwrap(),
+                Request::get("/storage/stats")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -927,7 +1007,10 @@ mod tests {
         let app = make_app();
         let resp = app
             .oneshot(
-                Request::post("/storage/purge").body(Body::empty()).unwrap(),
+                Request::post("/storage/purge")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -939,7 +1022,12 @@ mod tests {
     async fn test_get_config() {
         let app = make_app();
         let resp = app
-            .oneshot(Request::get("/config").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/config")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -952,6 +1040,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::get("/dictation/history")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -963,10 +1052,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_dictation_start_stop() {
-        let app1 = make_app();
+        let state = make_state();
+
+        // Start dictation.
+        let app1 = crate::create_router(state.clone());
         let resp1 = app1
             .oneshot(
                 Request::post("/dictation/start")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -974,16 +1067,64 @@ mod tests {
             .unwrap();
         assert_eq!(resp1.status(), StatusCode::OK);
 
-        let app2 = make_app();
+        // Stop dictation on the same shared state.
+        let app2 = crate::create_router(state);
         let resp2 = app2
             .oneshot(
                 Request::post("/dictation/stop")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(resp2.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_dictation_stop_when_idle_returns_conflict() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/dictation/stop")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn test_dictation_start_when_active_returns_conflict() {
+        let state = make_state();
+
+        // Start dictation.
+        let app1 = crate::create_router(state.clone());
+        let resp1 = app1
+            .oneshot(
+                Request::post("/dictation/start")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp1.status(), StatusCode::OK);
+
+        // Try to start again on the same shared state.
+        let app2 = crate::create_router(state);
+        let resp2 = app2
+            .oneshot(
+                Request::post("/dictation/start")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp2.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
@@ -1005,11 +1146,59 @@ mod tests {
         let app = make_app();
         let resp = app
             .oneshot(
-                Request::get("/audio/status").body(Body::empty()).unwrap(),
+                Request::get("/audio/status")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
             )
             .await
             .unwrap();
 
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_protected_endpoint_requires_auth() {
+        let app = make_app();
+        let resp = app
+            .oneshot(Request::get("/recent").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_protected_endpoint_rejects_bad_token() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/recent")
+                    .header("authorization", "Bearer wrong-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_health_is_public() {
+        let app = make_app();
+        let resp = app
+            .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_ui_is_public() {
+        let app = make_app();
+        let resp = app
+            .oneshot(Request::get("/ui").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 }

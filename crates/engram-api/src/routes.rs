@@ -6,7 +6,8 @@
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::compression::CompressionLayer;
-use tower_http::cors::{Any, CorsLayer};
+use axum::http::{header, HeaderValue, Method};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use crate::handlers;
@@ -22,42 +23,46 @@ use crate::state::AppState;
 pub fn create_router(state: AppState) -> Router {
     // CORS middleware: allow localhost origins for dashboard access.
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin(AllowOrigin::list([
+            "http://127.0.0.1:3030".parse::<HeaderValue>().unwrap(),
+            "http://localhost:3030".parse::<HeaderValue>().unwrap(),
+            "http://127.0.0.1:3031".parse::<HeaderValue>().unwrap(),
+            "http://localhost:3031".parse::<HeaderValue>().unwrap(),
+        ]))
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT]);
 
-    Router::new()
-        // Search endpoints
+    // Routes that do NOT require authentication.
+    let public_routes = Router::new()
+        .route("/health", get(handlers::health))
+        .route("/ui", get(handlers::ui));
+
+    // Routes that require bearer token authentication.
+    let protected_routes = Router::new()
         .route("/search", get(handlers::search))
-        // Live data
         .route("/recent", get(handlers::recent))
         .route("/stream", get(handlers::stream))
-        // App endpoints
         .route("/apps", get(handlers::apps))
         .route("/apps/{name}/activity", get(handlers::app_activity))
-        // Audio endpoints
         .route("/audio/status", get(handlers::audio_status))
-        // Dictation endpoints
         .route("/dictation/status", get(handlers::dictation_status))
         .route("/dictation/history", get(handlers::dictation_history))
         .route("/dictation/start", post(handlers::dictation_start))
         .route("/dictation/stop", post(handlers::dictation_stop))
-        // Storage endpoints
         .route("/storage/stats", get(handlers::storage_stats))
         .route("/storage/purge", post(handlers::storage_purge))
-        // Configuration endpoints
         .route("/config", get(handlers::get_config).put(handlers::update_config))
-        // Ingest (manual data entry)
         .route("/ingest", post(handlers::ingest))
-        // Health check
-        .route("/health", get(handlers::health))
-        // Dashboard
-        .route("/ui", get(handlers::ui))
-        // Middleware layers
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::require_auth,
+        ));
+
+    public_routes
+        .merge(protected_routes)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
-        // Shared state
         .with_state(state)
 }
 

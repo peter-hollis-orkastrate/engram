@@ -12,7 +12,7 @@ use engram_core::types::ContentType;
 
 use std::sync::Arc;
 
-use crate::embedding::EmbeddingService;
+use crate::embedding::{DynEmbeddingService, EmbeddingService};
 use crate::index::VectorIndex;
 
 /// Filters applied to search queries.
@@ -44,15 +44,21 @@ pub struct SearchResult {
 }
 
 /// Search engine combining vector similarity with metadata filtering.
-pub struct SearchEngine<E: EmbeddingService> {
+///
+/// Uses dynamic dispatch (`Box<dyn DynEmbeddingService>`) so that production
+/// code can supply `OnnxEmbeddingService` while tests use `MockEmbedding`.
+pub struct SearchEngine {
     index: Arc<VectorIndex>,
-    embedder: E,
+    embedder: Box<dyn DynEmbeddingService>,
 }
 
-impl<E: EmbeddingService> SearchEngine<E> {
+impl SearchEngine {
     /// Create a new search engine with a shared index and embedding service.
-    pub fn new(index: Arc<VectorIndex>, embedder: E) -> Self {
-        Self { index, embedder }
+    pub fn new(index: Arc<VectorIndex>, embedder: impl EmbeddingService + 'static) -> Self {
+        Self {
+            index,
+            embedder: Box::new(embedder),
+        }
     }
 
     /// Perform a hybrid search: embed the query, search the index, then filter.
@@ -65,7 +71,7 @@ impl<E: EmbeddingService> SearchEngine<E> {
         filters: SearchFilters,
         k: usize,
     ) -> Result<Vec<SearchResult>, EngramError> {
-        let query_vec = self.embedder.embed(query).await?;
+        let query_vec = self.embedder.embed_boxed(query).await?;
 
         // Fetch more candidates than k to account for filtering.
         let fetch_count = k * 3;
@@ -153,7 +159,7 @@ mod tests {
     use super::*;
     use crate::embedding::MockEmbedding;
 
-    fn make_engine() -> SearchEngine<MockEmbedding> {
+    fn make_engine() -> SearchEngine {
         SearchEngine::new(Arc::new(VectorIndex::new()), MockEmbedding::new())
     }
 

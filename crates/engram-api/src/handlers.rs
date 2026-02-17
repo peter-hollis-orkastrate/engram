@@ -3,9 +3,10 @@
 //! Each handler extracts query/path parameters via axum extractors,
 //! interacts with AppState services, and returns JSON responses.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -49,6 +50,26 @@ pub struct RecentParams {
 pub struct DictationHistoryParams {
     pub limit: Option<u64>,
     pub app: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HybridSearchParams {
+    pub q: Option<String>,
+    pub limit: Option<u64>,
+    pub offset: Option<u64>,
+    pub content_type: Option<String>,
+    pub app: Option<String>,
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub fts_weight: Option<f32>,
+    pub vector_weight: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawSearchParams {
+    pub q: Option<String>,
+    pub limit: Option<u64>,
+    pub content_type: Option<String>,
 }
 
 // =============================================================================
@@ -157,6 +178,24 @@ pub struct PurgeResultResponse {
     pub dry_run: bool,
     pub entries_processed: u64,
     pub bytes_reclaimed: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchResponse {
+    pub results: Vec<SearchResultItem>,
+    pub total: u64,
+    pub query: String,
+    pub search_type: String,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchResultItem {
+    pub chunk_id: String,
+    pub score: f64,
+    pub content: String,
+    pub timestamp: Option<String>,
+    pub source: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -649,6 +688,248 @@ pub async fn health(
 /// GET /ui - serve the full self-contained dashboard HTML.
 pub async fn ui() -> impl IntoResponse {
     Html(engram_ui::dashboard::DASHBOARD_HTML)
+}
+
+// =============================================================================
+// Specialized search endpoints
+// =============================================================================
+
+/// GET /search/semantic - semantic vector search using HNSW k-NN.
+pub async fn search_semantic(
+    State(state): State<AppState>,
+    Query(params): Query<SearchParams>,
+) -> Result<Json<SearchResponse>, ApiError> {
+    let start_time = Instant::now();
+
+    let q = params
+        .q
+        .ok_or_else(|| ApiError::BadRequest("Parameter 'q' is required".to_string()))?;
+
+    if q.is_empty() || q.len() > 1000 {
+        return Err(ApiError::BadRequest(
+            "Parameter 'q' must be between 1 and 1000 characters".to_string(),
+        ));
+    }
+
+    let limit = params.limit.unwrap_or(20).clamp(1, 100) as usize;
+
+    let filters = SearchFilters {
+        content_type: params.content_type.as_deref().and_then(|ct| match ct {
+            "screen" => Some(ContentType::Screen),
+            "audio" => Some(ContentType::Audio),
+            "dictation" => Some(ContentType::Dictation),
+            _ => None,
+        }),
+        app_name: params.app.clone(),
+        start: params.start.as_deref().and_then(|s| s.parse().ok()),
+        end: params.end.as_deref().and_then(|s| s.parse().ok()),
+    };
+
+    let vector_results = state
+        .search_engine
+        .hybrid_search(&q, filters, limit)
+        .await
+        .unwrap_or_default();
+
+    let capture_repo = CaptureRepository::new(Arc::clone(&state.database));
+
+    let results: Vec<SearchResultItem> = vector_results
+        .iter()
+        .map(|vr| {
+            let content = if let Ok(Some(frame)) = capture_repo.find_by_id(vr.id) {
+                frame.text
+            } else {
+                String::new()
+            };
+
+            SearchResultItem {
+                chunk_id: vr.id.to_string(),
+                score: vr.score,
+                content,
+                timestamp: vr.timestamp.clone(),
+                source: vr.content_type.clone().unwrap_or_default(),
+            }
+        })
+        .collect();
+
+    let total = results.len() as u64;
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+
+    Ok(Json(SearchResponse {
+        results,
+        total,
+        query: q,
+        search_type: "semantic".to_string(),
+        duration_ms,
+    }))
+}
+
+/// GET /search/hybrid - combined FTS + vector search with configurable weights.
+pub async fn search_hybrid(
+    State(state): State<AppState>,
+    Query(params): Query<HybridSearchParams>,
+) -> Result<Json<SearchResponse>, ApiError> {
+    let start_time = Instant::now();
+
+    let q = params
+        .q
+        .ok_or_else(|| ApiError::BadRequest("Parameter 'q' is required".to_string()))?;
+
+    if q.is_empty() || q.len() > 1000 {
+        return Err(ApiError::BadRequest(
+            "Parameter 'q' must be between 1 and 1000 characters".to_string(),
+        ));
+    }
+
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
+    let fts_weight = params.fts_weight.unwrap_or(0.3) as f64;
+    let vector_weight = params.vector_weight.unwrap_or(0.7) as f64;
+
+    // Run FTS search.
+    let fts_results = if let Some(ref ct) = params.content_type {
+        state.fts_search.search_by_type(&q, ct, limit)?
+    } else {
+        state.fts_search.search(&q, limit)?
+    };
+
+    // Run vector search.
+    let filters = SearchFilters {
+        content_type: params.content_type.as_deref().and_then(|ct| match ct {
+            "screen" => Some(ContentType::Screen),
+            "audio" => Some(ContentType::Audio),
+            "dictation" => Some(ContentType::Dictation),
+            _ => None,
+        }),
+        app_name: params.app.clone(),
+        start: params.start.as_deref().and_then(|s| s.parse().ok()),
+        end: params.end.as_deref().and_then(|s| s.parse().ok()),
+    };
+
+    let vector_results = state
+        .search_engine
+        .hybrid_search(&q, filters, limit as usize)
+        .await
+        .unwrap_or_default();
+
+    // Normalize FTS BM25 scores to 0-1 range.
+    let max_fts_score = fts_results
+        .iter()
+        .map(|r| r.rank)
+        .fold(0.0_f64, f64::max);
+
+    // Merge results by ID, combining scores.
+    let mut merged: HashMap<String, (f64, String, Option<String>, String)> = HashMap::new();
+
+    for fr in &fts_results {
+        let normalized_score = if max_fts_score > 0.0 {
+            fr.rank / max_fts_score
+        } else {
+            0.0
+        };
+        let id_str = fr.id.to_string();
+        let entry = merged.entry(id_str).or_insert((
+            0.0,
+            fr.text.clone(),
+            Some(fr.timestamp.to_rfc3339()),
+            fr.content_type.clone(),
+        ));
+        entry.0 += normalized_score * fts_weight;
+    }
+
+    let capture_repo = CaptureRepository::new(Arc::clone(&state.database));
+
+    for vr in &vector_results {
+        let id_str = vr.id.to_string();
+        let entry = merged.entry(id_str).or_insert_with(|| {
+            let content = if let Ok(Some(frame)) = capture_repo.find_by_id(vr.id) {
+                frame.text
+            } else {
+                String::new()
+            };
+            (
+                0.0,
+                content,
+                vr.timestamp.clone(),
+                vr.content_type.clone().unwrap_or_default(),
+            )
+        });
+        entry.0 += vr.score * vector_weight;
+    }
+
+    // Sort by combined score descending.
+    let mut sorted: Vec<_> = merged.into_iter().collect();
+    sorted.sort_by(|a, b| b.1 .0.partial_cmp(&a.1 .0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let results: Vec<SearchResultItem> = sorted
+        .into_iter()
+        .take(limit as usize)
+        .map(|(id, (score, content, timestamp, source))| SearchResultItem {
+            chunk_id: id,
+            score,
+            content,
+            timestamp,
+            source,
+        })
+        .collect();
+
+    let total = results.len() as u64;
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+
+    Ok(Json(SearchResponse {
+        results,
+        total,
+        query: q,
+        search_type: "hybrid".to_string(),
+        duration_ms,
+    }))
+}
+
+/// GET /search/raw - raw FTS5 keyword search.
+pub async fn search_raw(
+    State(state): State<AppState>,
+    Query(params): Query<RawSearchParams>,
+) -> Result<Json<SearchResponse>, ApiError> {
+    let start_time = Instant::now();
+
+    let q = params
+        .q
+        .ok_or_else(|| ApiError::BadRequest("Parameter 'q' is required".to_string()))?;
+
+    if q.is_empty() || q.len() > 1000 {
+        return Err(ApiError::BadRequest(
+            "Parameter 'q' must be between 1 and 1000 characters".to_string(),
+        ));
+    }
+
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
+
+    let fts_results = if let Some(ref ct) = params.content_type {
+        state.fts_search.search_by_type(&q, ct, limit)?
+    } else {
+        state.fts_search.search(&q, limit)?
+    };
+
+    let results: Vec<SearchResultItem> = fts_results
+        .into_iter()
+        .map(|fr| SearchResultItem {
+            chunk_id: fr.id.to_string(),
+            score: fr.rank,
+            content: fr.text,
+            timestamp: Some(fr.timestamp.to_rfc3339()),
+            source: fr.content_type,
+        })
+        .collect();
+
+    let total = results.len() as u64;
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+
+    Ok(Json(SearchResponse {
+        results,
+        total,
+        query: q,
+        search_type: "raw".to_string(),
+        duration_ms,
+    }))
 }
 
 // =============================================================================
@@ -1285,6 +1566,175 @@ mod tests {
             engram_core::error::EngramError::RateLimited.into();
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    // --- M1 Phase 3: Search endpoint tests ---
+
+    #[tokio::test]
+    async fn test_search_semantic_requires_q() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search/semantic")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_search_semantic_empty_db() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search/semantic?q=hello")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let result: SearchResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result.search_type, "semantic");
+        assert_eq!(result.total, 0);
+        assert_eq!(result.query, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_search_hybrid_requires_q() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search/hybrid")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_search_hybrid_empty_db() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search/hybrid?q=hello")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let result: SearchResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result.search_type, "hybrid");
+        assert_eq!(result.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_search_raw_requires_q() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search/raw")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_search_raw_empty_db() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search/raw?q=hello")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let result: SearchResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result.search_type, "raw");
+        assert_eq!(result.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_search_raw_finds_fts_results() {
+        let state = make_state();
+
+        state.database.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, app_name, window_title)
+                 VALUES (?1, 'screen', strftime('%s','now'), 'finding raw search data', 'Chrome', 'Tab')",
+                rusqlite::params![Uuid::new_v4().to_string()],
+            ).map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/search/raw?q=finding")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let result: SearchResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result.search_type, "raw");
+        assert_eq!(result.total, 1);
+        assert_eq!(result.results[0].content, "finding raw search data");
+    }
+
+    #[tokio::test]
+    async fn test_search_semantic_rejects_long_query() {
+        let app = make_app();
+        let long_q = "a".repeat(1001);
+        let resp = app
+            .oneshot(
+                Request::get(&format!("/search/semantic?q={}", long_q))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_search_endpoints_require_auth() {
+        let app = make_app();
+        for path in ["/search/semantic?q=test", "/search/hybrid?q=test", "/search/raw?q=test"] {
+            let resp = crate::create_router(make_state())
+                .oneshot(
+                    Request::get(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "Expected 401 for {}", path);
+        }
     }
 
     #[tokio::test]

@@ -62,6 +62,9 @@ pub fn create_router(state: AppState) -> Router {
                 .put(handlers::update_config)
                 .layer(DefaultBodyLimit::max(64 * 1024)), // 64KB for config
         )
+        .route("/search/semantic", get(handlers::search_semantic))
+        .route("/search/hybrid", get(handlers::search_hybrid))
+        .route("/search/raw", get(handlers::search_raw))
         .route("/ingest", post(handlers::ingest))
         .layer(axum::middleware::from_fn(crate::rate_limit::rate_limit_middleware))
         .layer(axum::Extension(limiter));

@@ -41,6 +41,11 @@ pub fn run_migrations(conn: &Connection) -> Result<(), EngramError> {
         info!("Applied migration v2: fts5_full_text_search");
     }
 
+    if current_version < 3 {
+        apply_v3(conn)?;
+        info!("Applied migration v3: vectors_metadata_and_config");
+    }
+
     Ok(())
 }
 
@@ -233,6 +238,39 @@ fn apply_v2(conn: &Connection) -> Result<(), EngramError> {
     Ok(())
 }
 
+/// Version 3: Vectors metadata and config tables.
+///
+/// Creates tables for vector metadata tracking and key-value configuration storage.
+fn apply_v3(conn: &Connection) -> Result<(), EngramError> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS vectors_metadata (
+            id              TEXT PRIMARY KEY NOT NULL,
+            content_type    TEXT NOT NULL,
+            source_id       TEXT NOT NULL,
+            dimensions      INTEGER NOT NULL DEFAULT 384,
+            format          TEXT NOT NULL DEFAULT 'f32',
+            created_at      INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+            updated_at      INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_vectors_content_type ON vectors_metadata (content_type);
+        CREATE INDEX IF NOT EXISTS idx_vectors_source ON vectors_metadata (source_id);
+
+        CREATE TABLE IF NOT EXISTS config (
+            key         TEXT PRIMARY KEY NOT NULL,
+            value       TEXT NOT NULL DEFAULT '',
+            updated_at  INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+        );
+
+        INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (3, 'vectors_metadata_and_config');
+        ",
+    )
+    .map_err(|e| EngramError::Storage(format!("Failed to apply migration v3: {}", e)))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,7 +294,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     #[test]
@@ -368,5 +406,106 @@ mod tests {
             [],
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_v3_vectors_metadata_table() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO vectors_metadata (id, content_type, source_id, dimensions, format)
+             VALUES ('vec-1', 'screen', 'cap-1', 384, 'f32')",
+            [],
+        )
+        .unwrap();
+
+        let dims: i64 = conn
+            .query_row(
+                "SELECT dimensions FROM vectors_metadata WHERE id = 'vec-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(dims, 384);
+    }
+
+    #[test]
+    fn test_v3_config_table() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES ('model_name', 'all-MiniLM-L6-v2')",
+            [],
+        )
+        .unwrap();
+
+        let value: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'model_name'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "all-MiniLM-L6-v2");
+    }
+
+    #[test]
+    fn test_v3_vectors_metadata_indexes() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        // Insert multiple entries to test index-based lookups.
+        conn.execute(
+            "INSERT INTO vectors_metadata (id, content_type, source_id) VALUES ('v1', 'screen', 'src-1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO vectors_metadata (id, content_type, source_id) VALUES ('v2', 'audio', 'src-1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO vectors_metadata (id, content_type, source_id) VALUES ('v3', 'screen', 'src-2')",
+            [],
+        )
+        .unwrap();
+
+        // Query by content_type (uses idx_vectors_content_type).
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM vectors_metadata WHERE content_type = 'screen'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // Query by source_id (uses idx_vectors_source).
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM vectors_metadata WHERE source_id = 'src-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_v3_migration_version_recorded() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 3",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "vectors_metadata_and_config");
     }
 }

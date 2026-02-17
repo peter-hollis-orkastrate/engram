@@ -664,6 +664,150 @@ pub async fn update_config(
     Ok(Json(updated))
 }
 
+// =============================================================================
+// Audio device endpoint
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioDeviceInfo {
+    pub name: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub buffer_size: u32,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AudioDeviceResponse {
+    pub active_device: Option<AudioDeviceInfo>,
+    pub available_devices: Vec<AudioDeviceInfo>,
+}
+
+/// GET /audio/device - audio device information.
+pub async fn audio_device(
+    State(state): State<AppState>,
+) -> Result<Json<AudioDeviceResponse>, ApiError> {
+    let is_active = state.audio_active.load(std::sync::atomic::Ordering::Relaxed);
+
+    let default_device = AudioDeviceInfo {
+        name: "Default Audio Device".to_string(),
+        sample_rate: 16000,
+        channels: 1,
+        buffer_size: 4096,
+        is_active,
+    };
+
+    let active_device = if is_active {
+        Some(default_device.clone())
+    } else {
+        None
+    };
+
+    Ok(Json(AudioDeviceResponse {
+        active_device,
+        available_devices: vec![AudioDeviceInfo {
+            name: "Default Audio Device".to_string(),
+            sample_rate: 16000,
+            channels: 1,
+            buffer_size: 4096,
+            is_active,
+        }],
+    }))
+}
+
+// =============================================================================
+// Purge dry-run endpoint
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct PurgeDryRunParams {
+    pub before: Option<String>,
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub confirm: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PurgeDryRunResponse {
+    pub chunks_affected: u64,
+    pub embeddings_affected: u64,
+    pub frames_affected: u64,
+    pub bytes_freed: u64,
+    pub dry_run: bool,
+}
+
+/// POST /storage/purge/dry-run - preview purge results without deleting.
+pub async fn purge_dry_run(
+    State(state): State<AppState>,
+    Json(params): Json<PurgeDryRunParams>,
+) -> Result<Json<PurgeDryRunResponse>, ApiError> {
+    // At least one filter required
+    if params.before.is_none() && params.content_type.is_none() {
+        return Err(ApiError::BadRequest(
+            "At least one of 'before' or 'content_type' must be provided".to_string(),
+        ));
+    }
+
+    // Parse before timestamp if provided
+    let before_ts = if let Some(ref before) = params.before {
+        let dt: DateTime<Utc> = before.parse().map_err(|_| {
+            ApiError::BadRequest(format!("Invalid ISO 8601 date: {}", before))
+        })?;
+        Some(dt.timestamp())
+    } else {
+        None
+    };
+
+    // Validate content_type if provided
+    if let Some(ref ct) = params.content_type {
+        if !["screen", "audio", "dictation", "Screenshot", "AudioTranscription", "Dictation", "Manual"].contains(&ct.as_str()) {
+            return Err(ApiError::BadRequest(format!(
+                "Invalid content_type '{}'. Must be one of: screen, audio, dictation",
+                ct
+            )));
+        }
+    }
+
+    // Count matching records using read-only queries
+    let count = state.database.with_conn(|conn| {
+        let mut sql = "SELECT COUNT(*), COALESCE(SUM(LENGTH(text)), 0) FROM captures WHERE 1=1".to_string();
+        let mut sql_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(ts) = before_ts {
+            sql.push_str(" AND timestamp < ?");
+            sql_params.push(Box::new(ts));
+        }
+        if let Some(ref ct) = params.content_type {
+            let normalized = match ct.as_str() {
+                "Screenshot" | "screen" => "screen",
+                "AudioTranscription" | "audio" => "audio",
+                "Dictation" | "dictation" => "dictation",
+                other => other,
+            };
+            sql.push_str(" AND content_type = ?");
+            sql_params.push(Box::new(normalized.to_string()));
+        }
+
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> = sql_params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql)
+            .map_err(|e| engram_core::error::EngramError::Storage(format!("Dry-run query failed: {}", e)))?;
+
+        let (count, bytes): (u64, u64) = stmt.query_row(params_refs.as_slice(), |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        }).map_err(|e| engram_core::error::EngramError::Storage(format!("Dry-run query failed: {}", e)))?;
+
+        Ok((count, bytes))
+    })?;
+
+    Ok(Json(PurgeDryRunResponse {
+        chunks_affected: count.0,
+        embeddings_affected: count.0,
+        frames_affected: count.0,
+        bytes_freed: count.1,
+        dry_run: true,
+    }))
+}
+
 /// GET /health - health check.
 pub async fn health(
     State(state): State<AppState>,
@@ -1723,7 +1867,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_endpoints_require_auth() {
-        let app = make_app();
+        let _app = make_app();
         for path in ["/search/semantic?q=test", "/search/hybrid?q=test", "/search/raw?q=test"] {
             let resp = crate::create_router(make_state())
                 .oneshot(
@@ -1743,5 +1887,194 @@ mod tests {
             engram_core::error::EngramError::PayloadTooLarge { size: 2_000_000, limit: 1_048_576 }.into();
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    // --- M2: Audio Device & Purge Dry-Run Tests ---
+
+    #[tokio::test]
+    async fn test_audio_device_endpoint() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/audio/device")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let device_resp: AudioDeviceResponse = serde_json::from_slice(&body).unwrap();
+        // Audio is not active by default, so active_device should be None.
+        assert!(device_resp.active_device.is_none());
+        assert_eq!(device_resp.available_devices.len(), 1);
+        assert_eq!(device_resp.available_devices[0].name, "Default Audio Device");
+        assert_eq!(device_resp.available_devices[0].sample_rate, 16000);
+        assert_eq!(device_resp.available_devices[0].channels, 1);
+    }
+
+    #[tokio::test]
+    async fn test_audio_device_when_active() {
+        let state = make_state();
+        state.audio_active.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/audio/device")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let device_resp: AudioDeviceResponse = serde_json::from_slice(&body).unwrap();
+        assert!(device_resp.active_device.is_some());
+        assert!(device_resp.active_device.unwrap().is_active);
+    }
+
+    #[tokio::test]
+    async fn test_purge_dry_run_with_content_type() {
+        let state = make_state();
+
+        // Insert test data.
+        state.database.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, app_name)
+                 VALUES (?1, 'screen', strftime('%s','now'), 'test screen data', 'Chrome')",
+                rusqlite::params![Uuid::new_v4().to_string()],
+            ).map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, app_name)
+                 VALUES (?1, 'audio', strftime('%s','now'), 'test audio data', 'Mic')",
+                rusqlite::params![Uuid::new_v4().to_string()],
+            ).map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge/dry-run")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content_type":"screen"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let result: PurgeDryRunResponse = serde_json::from_slice(&body).unwrap();
+        assert!(result.dry_run);
+        assert_eq!(result.chunks_affected, 1);
+    }
+
+    #[tokio::test]
+    async fn test_purge_dry_run_missing_params() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge/dry-run")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_purge_dry_run_invalid_content_type() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge/dry-run")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content_type":"invalid"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_purge_dry_run_with_before() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge/dry-run")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"before":"2099-01-01T00:00:00Z"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let result: PurgeDryRunResponse = serde_json::from_slice(&body).unwrap();
+        assert!(result.dry_run);
+    }
+
+    #[tokio::test]
+    async fn test_purge_dry_run_invalid_date() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge/dry-run")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"before":"not-a-date"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_audio_device_requires_auth() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/audio/device")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_purge_dry_run_requires_auth() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge/dry-run")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content_type":"screen"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

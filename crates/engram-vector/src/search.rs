@@ -61,6 +61,11 @@ impl SearchEngine {
         }
     }
 
+    /// Create a new search engine from a pre-boxed dynamic embedding service.
+    pub fn new_dyn(index: Arc<VectorIndex>, embedder: Box<dyn DynEmbeddingService>) -> Self {
+        Self { index, embedder }
+    }
+
     /// Perform a hybrid search: embed the query, search the index, then filter.
     ///
     /// The `k` parameter controls how many results to return after filtering.

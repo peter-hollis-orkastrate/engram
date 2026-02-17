@@ -11,9 +11,8 @@ use std::time::Instant;
 use engram_core::config::EngramConfig;
 use engram_dictation::DictationEngine;
 use engram_storage::{Database, FtsSearch, QueryService};
-use engram_vector::embedding::MockEmbedding;
+use engram_vector::embedding::{DynEmbeddingService, MockEmbedding};
 use engram_vector::{EngramPipeline, SearchEngine, VectorIndex};
-// Note: MockEmbedding import retained for use in SearchEngine construction.
 
 /// Shared application state.
 ///
@@ -95,6 +94,15 @@ impl AppState {
             audio_active: Arc::new(AtomicBool::new(false)),
             dictation_engine: Arc::new(DictationEngine::new()),
         }
+    }
+
+    /// Replace the search engine's embedding service.
+    pub fn with_search_embedding(mut self, embedder: Box<dyn DynEmbeddingService>) -> Self {
+        self.search_engine = Arc::new(SearchEngine::new_dyn(
+            Arc::clone(&self.vector_index),
+            embedder,
+        ));
+        self
     }
 
     /// Set the API token for bearer authentication.

@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use engram_core::config::EngramConfig;
 use engram_storage::Database;
-use engram_vector::embedding::MockEmbedding;
+use engram_vector::embedding::{EmbeddingService, MockEmbedding, OnnxEmbeddingService};
 use engram_vector::{EngramPipeline, VectorIndex};
 
 use engram_api::routes;
@@ -223,20 +223,26 @@ async fn audio_capture_loop(
 }
 
 /// Start the dictation hotkey listener as a background task.
-async fn dictation_listener(hotkey: String, engine: Arc<engram_dictation::DictationEngine>) {
+async fn dictation_listener(
+    hotkey: String,
+    engine: Arc<engram_dictation::DictationEngine>,
+    pipeline: Arc<EngramPipeline>,
+) {
     tracing::info!(hotkey = %hotkey, "Dictation listener started");
 
     #[cfg(not(target_os = "windows"))]
     {
         tracing::info!("Dictation hotkey requires Windows — skipping on this platform");
-        let _ = &engine; // suppress unused warning
+        let _ = (&engine, &pipeline); // suppress unused warnings
         return;
     }
 
     #[cfg(target_os = "windows")]
     {
-        use engram_dictation::{HotkeyConfig, HotkeyService};
-        use engram_core::types::DictationMode;
+        use engram_dictation::{HotkeyConfig, HotkeyService, TextInjector};
+        use engram_core::types::{ContentType, DictationEntry, DictationMode};
+
+        let text_injector = TextInjector::new();
 
         // HotkeyService contains a raw pointer (!Send), so run on a blocking thread.
         let _ = tokio::task::spawn_blocking(move || {
@@ -251,16 +257,42 @@ async fn dictation_listener(hotkey: String, engine: Arc<engram_dictation::Dictat
                 }
             };
 
+            let rt = tokio::runtime::Handle::current();
+            let mut dictation_start_time = std::time::Instant::now();
+            let mut current_target_app = String::new();
+            let mut current_target_window = String::new();
+
             // Poll for hotkey presses and toggle dictation on/off.
             let mut is_dictating = false;
             loop {
                 if hotkey_service.was_pressed() {
                     if is_dictating {
+                        let duration_secs = dictation_start_time.elapsed().as_secs_f32();
+
                         // Stop dictation and retrieve transcribed text.
                         match engine.stop_dictation() {
                             Ok(Some(text)) => {
                                 tracing::info!(text_len = text.len(), "Dictation complete");
-                                // TODO: inject text into focused application via TextInjector
+
+                                // Inject text into the focused application.
+                                if let Err(e) = text_injector.inject(&text) {
+                                    tracing::warn!(error = %e, "Text injection failed");
+                                }
+
+                                // Store dictation entry in the pipeline.
+                                let entry = DictationEntry {
+                                    id: uuid::Uuid::new_v4(),
+                                    content_type: ContentType::Dictation,
+                                    timestamp: chrono::Utc::now(),
+                                    text: text.clone(),
+                                    target_app: current_target_app.clone(),
+                                    target_window: current_target_window.clone(),
+                                    duration_secs,
+                                    mode: DictationMode::TypeAndStore,
+                                };
+                                if let Err(e) = rt.block_on(pipeline.ingest_dictation(entry)) {
+                                    tracing::warn!(error = %e, "Dictation ingest failed");
+                                }
                             }
                             Ok(None) => {
                                 tracing::debug!("Dictation stopped with no text");
@@ -272,15 +304,15 @@ async fn dictation_listener(hotkey: String, engine: Arc<engram_dictation::Dictat
                         is_dictating = false;
                     } else {
                         // Start dictation for the currently focused application.
-                        // TODO: detect the actual focused app and window title
-                        let target_app = "unknown".to_string();
-                        let target_window = "unknown".to_string();
+                        current_target_app = "unknown".to_string();
+                        current_target_window = "unknown".to_string();
                         match engine.start_dictation(
-                            target_app,
-                            target_window,
+                            current_target_app.clone(),
+                            current_target_window.clone(),
                             DictationMode::TypeAndStore,
                         ) {
                             Ok(()) => {
+                                dictation_start_time = std::time::Instant::now();
                                 tracing::info!("Dictation started via hotkey");
                                 is_dictating = true;
                             }
@@ -295,6 +327,51 @@ async fn dictation_listener(hotkey: String, engine: Arc<engram_dictation::Dictat
         })
         .await;
     }
+}
+
+/// Detect and load an ONNX embedding model, falling back to MockEmbedding.
+///
+/// Checks for `model.onnx` + `tokenizer.json` in the configured model directory
+/// (or `{data_dir}/models/` by default). Returns a boxed dynamic embedding service.
+fn create_embedding_service(
+    config: &EngramConfig,
+    data_dir: &std::path::Path,
+) -> Box<dyn engram_vector::embedding::DynEmbeddingService> {
+    let model_dir = if config.general.embedding_model_dir.is_empty() {
+        data_dir.join("models")
+    } else {
+        std::path::PathBuf::from(&config.general.embedding_model_dir)
+    };
+
+    let model_path = model_dir.join("model.onnx");
+    let tokenizer_path = model_dir.join("tokenizer.json");
+
+    if model_path.exists() && tokenizer_path.exists() {
+        match OnnxEmbeddingService::from_directory(&model_dir) {
+            Ok(svc) => {
+                tracing::info!(
+                    model_dir = %model_dir.display(),
+                    dimensions = svc.dimensions(),
+                    "ONNX embedding service loaded — semantic search enabled"
+                );
+                return Box::new(svc);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    model_dir = %model_dir.display(),
+                    "Failed to load ONNX model — falling back to MockEmbedding"
+                );
+            }
+        }
+    } else {
+        tracing::warn!(
+            model_dir = %model_dir.display(),
+            "ONNX model not found (expected model.onnx + tokenizer.json) — using MockEmbedding"
+        );
+    }
+
+    Box::new(MockEmbedding::new())
 }
 
 /// Expand ~ to home directory in a path string.
@@ -360,12 +437,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let index = Arc::new(VectorIndex::new());
     tracing::info!("HNSW vector index initialized");
 
+    // Detect ONNX embedding model (or fall back to MockEmbedding).
+    let embedding_service = create_embedding_service(&config, &data_dir);
+
     // Ingestion pipeline with dual-write to SQLite.
     let db_arc = Arc::new(db);
     let pipeline = Arc::new(
-        EngramPipeline::new(
+        EngramPipeline::new_dyn(
             Arc::clone(&index),
-            MockEmbedding::new(),
+            embedding_service,
             config.safety.clone(),
             config.search.dedup_threshold,
         )
@@ -375,15 +455,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // API state uses a separate DB connection (SQLite supports concurrent readers).
     let api_db = Database::new(&db_path)?;
-    let api_pipeline = EngramPipeline::new(
+    let api_embedding = create_embedding_service(&config, &data_dir);
+    let api_pipeline = EngramPipeline::new_dyn(
         Arc::clone(&index),
-        MockEmbedding::new(),
+        api_embedding,
         config.safety.clone(),
         config.search.dedup_threshold,
     );
+
+    // Generate or load API authentication token.
+    let token_path = data_dir.join(".api_token");
+    let api_token = engram_api::auth::load_or_generate_token(&token_path);
+    tracing::info!("API token: {}", api_token);
+
     // Shared state for audio and dictation control.
     let audio_active = Arc::new(AtomicBool::new(false));
-    let dictation_engine = Arc::new(engram_dictation::DictationEngine::new());
+
+    // Create dictation engine with Whisper transcription if available.
+    let dictation_engine = {
+        use engram_whisper::{TranscriptionService, WhisperConfig, WhisperService};
+        match WhisperService::new(WhisperConfig::default()) {
+            Ok(whisper) => {
+                let whisper = Arc::new(whisper);
+                let transcription_fn: engram_dictation::TranscriptionFn =
+                    Box::new(move |samples, sample_rate| {
+                        let whisper = Arc::clone(&whisper);
+                        let samples = samples.to_vec();
+                        let handle = tokio::runtime::Handle::current();
+                        let result = handle.block_on(async move {
+                            whisper.transcribe(&samples, sample_rate).await
+                        })?;
+                        Ok(result.text)
+                    });
+                tracing::info!("Dictation engine initialized with Whisper transcription");
+                Arc::new(engram_dictation::DictationEngine::with_transcription(transcription_fn))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Whisper unavailable — dictation will use placeholder text"
+                );
+                Arc::new(engram_dictation::DictationEngine::new())
+            }
+        }
+    };
+
+    // Build search-engine embedding from the same detector.
+    let search_embedding = create_embedding_service(&config, &data_dir);
 
     let state = AppState::with_config_path(
         config.clone(),
@@ -392,6 +510,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_pipeline,
         config_file.clone(),
     )
+    .with_search_embedding(search_embedding)
+    .with_api_token(api_token)
     .with_shared_state(Arc::clone(&audio_active), Arc::clone(&dictation_engine));
 
     // === Background tasks ===
@@ -443,8 +563,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Dictation hotkey listener.
     let dictation_hotkey = config.dictation.hotkey.clone();
     let dictation_engine_clone = Arc::clone(&dictation_engine);
+    let pipeline_dictation = Arc::clone(&pipeline);
     tokio::spawn(async move {
-        dictation_listener(dictation_hotkey, dictation_engine_clone).await;
+        dictation_listener(dictation_hotkey, dictation_engine_clone, pipeline_dictation).await;
     });
 
     // === API server ===

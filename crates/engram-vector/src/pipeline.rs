@@ -73,6 +73,22 @@ impl EngramPipeline {
         }
     }
 
+    /// Create a new pipeline from a pre-boxed dynamic embedding service.
+    pub fn new_dyn(
+        index: Arc<VectorIndex>,
+        embedder: Box<dyn DynEmbeddingService>,
+        safety_config: SafetyConfig,
+        dedup_threshold: f64,
+    ) -> Self {
+        Self {
+            index,
+            embedder,
+            safety_gate: SafetyGate::new(safety_config),
+            dedup_threshold,
+            database: None,
+        }
+    }
+
     /// Create a new pipeline with the default safety config and dedup threshold of 0.95.
     pub fn with_defaults(index: Arc<VectorIndex>, embedder: impl EmbeddingService + 'static) -> Self {
         Self::new(index, embedder, SafetyConfig::default(), 0.95)

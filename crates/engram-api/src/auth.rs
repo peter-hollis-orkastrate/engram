@@ -40,6 +40,12 @@ pub fn load_or_generate_token(token_path: &std::path::Path) -> String {
     if let Err(e) = std::fs::write(token_path, &token) {
         tracing::warn!(error = %e, "Failed to save API token to {}", token_path.display());
     } else {
+        // Restrict token file to owner-only access.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(token_path, std::fs::Permissions::from_mode(0o600));
+        }
         tracing::info!("API token saved to {}", token_path.display());
     }
 

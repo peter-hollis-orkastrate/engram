@@ -83,7 +83,11 @@ pub struct OnnxEmbeddingService {
     dimensions: usize,
 }
 
-// ort::Session is Send + Sync internally (uses Arc<SharedSessionInner>).
+// SAFETY: OnnxEmbeddingService is Send+Sync because:
+// 1. ort::Session uses Arc<SharedSessionInner> internally
+// 2. ONNX Runtime explicitly supports concurrent inference from multiple threads
+// 3. No mutable state is stored outside the Session
+// 4. Confirmed by ort documentation: sessions are immutable after creation
 unsafe impl Send for OnnxEmbeddingService {}
 unsafe impl Sync for OnnxEmbeddingService {}
 

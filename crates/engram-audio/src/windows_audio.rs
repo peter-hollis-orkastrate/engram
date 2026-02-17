@@ -103,6 +103,11 @@ impl AudioBuffer {
 #[cfg(target_os = "windows")]
 struct SendStream(#[allow(dead_code)] cpal::Stream);
 
+// SAFETY: SendStream wraps a cpal::Stream which manages its own audio thread.
+// 1. The Stream handle is only used to start/stop playback, not to share data
+// 2. Audio callbacks run on a separate OS thread managed by cpal
+// 3. No mutable shared state between the Stream handle and callbacks
+// 4. This is Windows-only; cpal's WASAPI backend is documented as thread-safe
 #[cfg(target_os = "windows")]
 unsafe impl Send for SendStream {}
 #[cfg(target_os = "windows")]

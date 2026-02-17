@@ -24,6 +24,19 @@ use engram_vector::{EngramPipeline, VectorIndex};
 use engram_api::routes;
 use engram_api::state::AppState;
 
+/// Set owner-only permissions (0o700) on a directory.
+#[cfg(unix)]
+fn set_directory_permissions(path: &std::path::Path) -> Result<(), std::io::Error> {
+    use std::os::unix::fs::PermissionsExt;
+    let perms = std::fs::Permissions::from_mode(0o700);
+    std::fs::set_permissions(path, perms)
+}
+
+#[cfg(not(unix))]
+fn set_directory_permissions(_path: &std::path::Path) -> Result<(), std::io::Error> {
+    Ok(()) // Windows ACLs handled separately
+}
+
 use engram_capture::{CaptureConfig, CaptureService, WindowsCaptureService};
 use engram_ocr::{OcrConfig, OcrService, WindowsOcrService};
 
@@ -427,6 +440,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = std::fs::create_dir_all(&data_dir) {
         tracing::error!(path = %data_dir.display(), error = %e, "Failed to create data directory");
         return Err(e.into());
+    }
+
+    // Set owner-only permissions on the data directory.
+    if let Err(e) = set_directory_permissions(&data_dir) {
+        tracing::warn!(path = %data_dir.display(), error = %e, "Failed to set directory permissions");
     }
 
     let db_path = data_dir.join("engram.db");

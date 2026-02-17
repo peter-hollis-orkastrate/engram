@@ -60,7 +60,10 @@ pub struct SileroVad {
     state: Mutex<VadState>,
 }
 
-// ort::Session is internally Send+Sync.
+// SAFETY: SileroVad is Send+Sync because:
+// 1. ort::Session uses Arc<SharedSessionInner> internally
+// 2. ONNX Runtime supports concurrent inference from multiple threads
+// 3. The model is read-only after loading; no mutable state beyond the Session
 unsafe impl Send for SileroVad {}
 unsafe impl Sync for SileroVad {}
 

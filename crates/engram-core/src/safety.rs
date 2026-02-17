@@ -95,10 +95,39 @@ impl SafetyGate {
     }
 }
 
-/// Detect and redact sequences of 13-16 digits that look like credit card numbers.
+/// Validate a sequence of digits using the Luhn checksum algorithm.
 ///
-/// Sequences of digits (with optional spaces or dashes) totaling 13-16 digits
-/// are replaced with `[CC_REDACTED]`.
+/// Returns `true` if the digit sequence has a valid Luhn checksum,
+/// which is a necessary (but not sufficient) condition for a valid
+/// credit card number.
+fn luhn_check(digits: &[u32]) -> bool {
+    if digits.len() < 13 || digits.len() > 19 {
+        return false;
+    }
+    let sum: u32 = digits
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(i, &d)| {
+            if i % 2 == 1 {
+                let doubled = d * 2;
+                if doubled > 9 {
+                    doubled - 9
+                } else {
+                    doubled
+                }
+            } else {
+                d
+            }
+        })
+        .sum();
+    sum % 10 == 0
+}
+
+/// Detect and redact sequences of 13-19 digits that look like credit card numbers.
+///
+/// Sequences of digits (with optional spaces or dashes) totaling 13-19 digits
+/// are replaced with `[CC_REDACTED]` only if they pass the Luhn checksum.
 fn redact_credit_cards(text: &str) -> (String, usize) {
     let mut result = String::with_capacity(text.len());
     let chars: Vec<char> = text.chars().collect();
@@ -125,9 +154,20 @@ fn redact_credit_cards(text: &str) -> (String, usize) {
                 i -= 1;
             }
 
-            if (13..=16).contains(&digit_count) {
-                result.push_str("[CC_REDACTED]");
-                count += 1;
+            if (13..=19).contains(&digit_count) {
+                // Collect just the digits for Luhn check
+                let digit_values: Vec<u32> = chars[start..i]
+                    .iter()
+                    .filter_map(|c| c.to_digit(10))
+                    .collect();
+                if luhn_check(&digit_values) {
+                    result.push_str("[CC_REDACTED]");
+                    count += 1;
+                } else {
+                    for c in &chars[start..i] {
+                        result.push(*c);
+                    }
+                }
             } else {
                 for c in &chars[start..i] {
                     result.push(*c);
@@ -453,6 +493,65 @@ mod tests {
         };
         let gate = SafetyGate::new(config);
         let decision = gate.check("email user@example.com");
+        assert_eq!(decision, SafetyDecision::Allow);
+    }
+
+    // -- Luhn validation --
+
+    #[test]
+    fn test_luhn_valid_visa() {
+        // 4111111111111111 is a well-known Visa test number that passes Luhn.
+        let digits: Vec<u32> = "4111111111111111"
+            .chars()
+            .map(|c| c.to_digit(10).unwrap())
+            .collect();
+        assert!(luhn_check(&digits));
+    }
+
+    #[test]
+    fn test_luhn_valid_mastercard() {
+        // 5500000000000004 is a well-known Mastercard test number that passes Luhn.
+        let digits: Vec<u32> = "5500000000000004"
+            .chars()
+            .map(|c| c.to_digit(10).unwrap())
+            .collect();
+        assert!(luhn_check(&digits));
+    }
+
+    #[test]
+    fn test_luhn_invalid() {
+        // 4111111111111112 does NOT pass Luhn, so it should not be redacted.
+        let gate = default_gate();
+        let decision = gate.check("card 4111111111111112 end");
+        assert_eq!(decision, SafetyDecision::Allow);
+    }
+
+    #[test]
+    fn test_luhn_19_digit_card() {
+        // 6304000000000000018 is a valid 19-digit Maestro test number.
+        // Luhn check: passes (sum = 30).
+        let digits: Vec<u32> = "6304000000000000018"
+            .chars()
+            .map(|c| c.to_digit(10).unwrap())
+            .collect();
+        assert!(luhn_check(&digits), "19-digit number should pass Luhn");
+
+        let gate = default_gate();
+        let decision = gate.check("card 6304000000000000018 end");
+        match decision {
+            SafetyDecision::Redacted { text, redaction_count } => {
+                assert_eq!(text, "card [CC_REDACTED] end");
+                assert_eq!(redaction_count, 1);
+            }
+            other => panic!("Expected Redacted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_luhn_rejects_random_digits() {
+        // 1234567890123456 does not pass Luhn and should not be redacted.
+        let gate = default_gate();
+        let decision = gate.check("number 1234567890123456 end");
         assert_eq!(decision, SafetyDecision::Allow);
     }
 }

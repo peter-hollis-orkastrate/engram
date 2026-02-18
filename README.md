@@ -66,7 +66,7 @@ cd engram
 # Build
 cargo build --release --workspace
 
-# Run tests (648 tests)
+# Run tests (657 tests)
 cargo test --workspace
 
 # Run the application
@@ -116,7 +116,7 @@ Config file at `~/.engram/config.toml` (auto-created on install). Priority: CLI 
 | **Phase 1: Critical Integration** | Complete | 241 | Audio pipeline wiring, real embeddings, dictation transcription, FTS5 injection fix, DB path fix |
 | **Phase 2: Security Hardening** | Complete | 387 | Bearer token auth, rate limiting, error sanitization, config protection, graceful shutdown, Luhn validation, file permissions, system tray wiring |
 | **Phase 3: Feature Completeness** | Complete | 560 | CLI (clap), 25+ config fields, phone PII, 3 search modes, 21 API routes, multi-monitor + DPI, webview HWND, WiX installer, `cargo deny`, criterion benchmarks, 66 integration tests |
-| **Phase 4: Summarization & Insights** | Complete | 648 | engram-insight crate, extractive summarization, regex entity extraction (URLs, dates, money, projects, people), daily digest, topic clustering, Obsidian vault export, 6 new API routes (27 total), migration v4, SSE event bus activation, deferred infrastructure (CF-1 to CF-7) |
+| **Phase 4: Summarization & Insights** | Complete | 657 | engram-insight crate, extractive summarization, regex entity extraction (URLs, dates, money, projects, people), daily digest, topic clustering, Obsidian vault export, 6 new API routes (27 total), migration v4, SSE event bus activation, deferred infrastructure (CF-1 to CF-7) |
 
 ### Upcoming Phases (PRDs Ready)
 

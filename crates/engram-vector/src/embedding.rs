@@ -31,6 +31,39 @@ pub trait EmbeddingService: Send + Sync {
     fn dimensions(&self) -> usize;
 }
 
+/// Object-safe version of [`EmbeddingService`] for dynamic dispatch.
+///
+/// Because `EmbeddingService::embed` returns `impl Future` it is not
+/// object-safe. This trait uses a boxed future instead, allowing
+/// `Box<dyn DynEmbeddingService>` to be stored in structs without generics.
+///
+/// A blanket implementation is provided so that every `EmbeddingService`
+/// automatically implements `DynEmbeddingService`.
+pub trait DynEmbeddingService: Send + Sync {
+    /// Generate an embedding vector for the given text (boxed future).
+    fn embed_boxed<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<f32>, EngramError>> + Send + 'a>>;
+
+    /// Return the dimensionality of vectors produced by this service.
+    fn dimensions(&self) -> usize;
+}
+
+/// Blanket impl: any `EmbeddingService` automatically implements `DynEmbeddingService`.
+impl<T: EmbeddingService> DynEmbeddingService for T {
+    fn embed_boxed<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<f32>, EngramError>> + Send + 'a>> {
+        Box::pin(self.embed(text))
+    }
+
+    fn dimensions(&self) -> usize {
+        EmbeddingService::dimensions(self)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // OnnxEmbeddingService - real ONNX Runtime inference
 // ---------------------------------------------------------------------------
@@ -358,7 +391,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_dimensions() {
         let service = MockEmbedding::new();
-        assert_eq!(service.dimensions(), 384);
+        assert_eq!(EmbeddingService::dimensions(&service), 384);
     }
 
     #[test]

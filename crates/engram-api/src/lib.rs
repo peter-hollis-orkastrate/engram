@@ -4,6 +4,7 @@
 //! live data streaming (SSE), audio/dictation status, storage management,
 //! configuration, and health checks.
 
+pub mod auth;
 pub mod error;
 pub mod handlers;
 pub mod routes;

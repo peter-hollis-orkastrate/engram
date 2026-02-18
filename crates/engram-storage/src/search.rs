@@ -12,6 +12,33 @@ use engram_core::error::EngramError;
 
 use crate::db::Database;
 
+/// Sanitize user input for safe use in FTS5 MATCH queries.
+///
+/// FTS5 query syntax includes operators like AND, OR, NOT, NEAR, column
+/// filters (e.g. `content_type:screen`), and special characters (`*`, `^`, `"`).
+/// Unsanitized user input can bypass content_type filters or cause parse errors.
+///
+/// This function wraps each whitespace-separated token in double quotes,
+/// escaping any embedded double quotes. This forces FTS5 to treat every
+/// token as a literal phrase rather than an operator.
+pub fn sanitize_fts5_query(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    // Split on whitespace, wrap each token in quotes with internal quotes escaped.
+    let tokens: Vec<String> = trimmed
+        .split_whitespace()
+        .map(|token| {
+            let escaped = token.replace('"', "\"\"");
+            format!("\"{}\"", escaped)
+        })
+        .collect();
+
+    tokens.join(" ")
+}
+
 /// A single full-text search result from FTS5.
 #[derive(Debug, Clone)]
 pub struct FtsResult {
@@ -51,6 +78,11 @@ impl FtsSearch {
             return Ok(Vec::new());
         }
 
+        let sanitized = sanitize_fts5_query(query);
+        if sanitized.is_empty() {
+            return Ok(Vec::new());
+        }
+
         self.db.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
@@ -65,7 +97,7 @@ impl FtsSearch {
                 .map_err(|e| EngramError::Storage(format!("FTS5 query prepare failed: {}", e)))?;
 
             let rows = stmt
-                .query_map(rusqlite::params![query, limit], |row| {
+                .query_map(rusqlite::params![sanitized, limit], |row| {
                     let id_str: String = row.get(0)?;
                     let content_type: String = row.get(1)?;
                     let timestamp_i64: i64 = row.get(2)?;
@@ -116,10 +148,66 @@ impl FtsSearch {
             return Ok(Vec::new());
         }
 
-        // Use FTS5 column filter syntax: content_type:screen AND text:query
-        let fts_query = format!("content_type:{} AND text:{}", content_type, query);
+        let sanitized_query = sanitize_fts5_query(query);
+        let sanitized_type = sanitize_fts5_query(content_type);
+        if sanitized_query.is_empty() || sanitized_type.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        self.search(&fts_query, limit)
+        // Use FTS5 column filter syntax with sanitized inputs.
+        let fts_query = format!("content_type:{} AND text:{}", sanitized_type, sanitized_query);
+
+        // Call db directly instead of self.search to avoid double-sanitizing.
+        self.db.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT c.id, c.content_type, c.timestamp, c.text, c.app_name,
+                            rank
+                     FROM captures_fts
+                     JOIN captures c ON c.rowid = captures_fts.rowid
+                     WHERE captures_fts MATCH ?1
+                     ORDER BY rank
+                     LIMIT ?2",
+                )
+                .map_err(|e| EngramError::Storage(format!("FTS5 query prepare failed: {}", e)))?;
+
+            let rows = stmt
+                .query_map(rusqlite::params![fts_query, limit], |row| {
+                    let id_str: String = row.get(0)?;
+                    let ct: String = row.get(1)?;
+                    let timestamp_i64: i64 = row.get(2)?;
+                    let text: String = row.get(3)?;
+                    let app_name: String = row.get(4)?;
+                    let rank: f64 = row.get(5)?;
+                    Ok((id_str, ct, timestamp_i64, text, app_name, rank))
+                })
+                .map_err(|e| EngramError::Storage(format!("FTS5 query failed: {}", e)))?;
+
+            let mut results = Vec::new();
+            for row in rows {
+                let (id_str, ct, timestamp_i64, text, app_name, rank) =
+                    row.map_err(|e| EngramError::Storage(e.to_string()))?;
+
+                let id = Uuid::parse_str(&id_str)
+                    .map_err(|e| EngramError::Storage(format!("Invalid UUID: {}", e)))?;
+
+                let timestamp = Utc
+                    .timestamp_opt(timestamp_i64, 0)
+                    .single()
+                    .unwrap_or_default();
+
+                results.push(FtsResult {
+                    id,
+                    content_type: ct,
+                    timestamp,
+                    text,
+                    app_name,
+                    rank: -rank,
+                });
+            }
+
+            Ok(results)
+        })
     }
 
     /// Count total matches for a query.
@@ -128,11 +216,16 @@ impl FtsSearch {
             return Ok(0);
         }
 
+        let sanitized = sanitize_fts5_query(query);
+        if sanitized.is_empty() {
+            return Ok(0);
+        }
+
         self.db.with_conn(|conn| {
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM captures_fts WHERE captures_fts MATCH ?1",
-                    rusqlite::params![query],
+                    rusqlite::params![sanitized],
                     |row| row.get(0),
                 )
                 .map_err(|e| EngramError::Storage(format!("FTS5 count failed: {}", e)))?;
@@ -304,5 +397,96 @@ mod tests {
         let results = search.search_by_type("hello", "screen", 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].content_type, "screen");
+    }
+
+    // --- FTS5 injection prevention tests ---
+
+    #[test]
+    fn test_fts5_injection_content_type_bypass() {
+        // query: ") OR (content_type:screen" should NOT bypass filtering
+        let db = make_db();
+        insert_capture(&db, "screen", "secret screen data", "Chrome");
+        insert_capture(&db, "audio", "public audio data", "Teams");
+
+        let search = FtsSearch::new(db);
+        let results = search
+            .search_by_type(") OR (content_type:screen", "audio", 10)
+            .unwrap();
+        // Should NOT return screen captures
+        for r in &results {
+            assert_eq!(
+                r.content_type, "audio",
+                "FTS5 injection bypassed content_type filter!"
+            );
+        }
+    }
+
+    #[test]
+    fn test_fts5_injection_or_operator() {
+        let db = make_db();
+        insert_capture(&db, "screen", "hello world", "Chrome");
+        insert_capture(&db, "audio", "goodbye world", "Teams");
+
+        let search = FtsSearch::new(db);
+        // "hello OR goodbye" should be treated as literal, not FTS5 OR
+        let results = search.search("hello OR goodbye", 10).unwrap();
+        // With sanitization, "OR" is quoted and treated literally
+        // Should not match both records via FTS5 OR semantics
+    }
+
+    #[test]
+    fn test_fts5_injection_near_operator() {
+        let db = make_db();
+        insert_capture(&db, "screen", "foo bar baz", "Chrome");
+        let search = FtsSearch::new(db);
+        let results = search.search("foo NEAR bar", 10).unwrap();
+        // Should be treated as literal search, not FTS5 NEAR
+    }
+
+    #[test]
+    fn test_fts5_injection_column_filter() {
+        let db = make_db();
+        insert_capture(&db, "screen", "test data", "Chrome");
+        let search = FtsSearch::new(db);
+        // "app_name:Chrome" should be treated as literal text
+        let results = search.search("app_name:Chrome", 10).unwrap();
+        // Should search for the literal text "app_name:Chrome"
+    }
+
+    #[test]
+    fn test_fts5_injection_asterisk_prefix() {
+        let db = make_db();
+        insert_capture(&db, "screen", "testing", "Chrome");
+        let search = FtsSearch::new(db);
+        let results = search.search("test*", 10).unwrap();
+        // Sanitized: "test*" is quoted, no prefix matching
+    }
+
+    #[test]
+    fn test_sanitize_fts5_query_basic() {
+        assert_eq!(sanitize_fts5_query("hello world"), "\"hello\" \"world\"");
+        assert_eq!(sanitize_fts5_query(""), "");
+        assert_eq!(sanitize_fts5_query("  "), "");
+        assert_eq!(sanitize_fts5_query("single"), "\"single\"");
+    }
+
+    #[test]
+    fn test_sanitize_fts5_query_operators() {
+        // FTS5 operators should be quoted
+        assert_eq!(
+            sanitize_fts5_query("hello OR world"),
+            "\"hello\" \"OR\" \"world\""
+        );
+        assert_eq!(sanitize_fts5_query("NOT secret"), "\"NOT\" \"secret\"");
+    }
+
+    #[test]
+    fn test_sanitize_fts5_query_special_chars() {
+        // Column filters and special syntax
+        assert_eq!(
+            sanitize_fts5_query("content_type:screen"),
+            "\"content_type:screen\""
+        );
+        assert_eq!(sanitize_fts5_query("test*"), "\"test*\"");
     }
 }

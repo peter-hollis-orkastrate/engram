@@ -9,7 +9,7 @@ pub mod hotkey;
 pub mod state;
 pub mod text_inject;
 
-pub use engine::{DictationEngine, DictationSession};
+pub use engine::{DictationEngine, DictationSession, TranscriptionFn};
 pub use hotkey::{HotkeyConfig, HotkeyService};
 pub use state::DictationState;
 pub use text_inject::TextInjector;

@@ -14,5 +14,5 @@ pub mod tier;
 pub use db::Database;
 pub use queries::{QueryService, CaptureRow, AppSummary, DbStats};
 pub use repository::{AudioRepository, CaptureRepository, DictationRepository};
-pub use search::{FtsResult, FtsSearch};
+pub use search::{sanitize_fts5_query, FtsResult, FtsSearch};
 pub use tier::{PurgeResult, TierManager};

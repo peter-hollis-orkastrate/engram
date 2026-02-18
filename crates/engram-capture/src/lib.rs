@@ -12,7 +12,10 @@ use uuid::Uuid;
 use engram_core::error::EngramError;
 use engram_core::types::{CaptureStatus, ContentType, ScreenFrame};
 
-pub use windows_capture::{CaptureConfig, WindowsCaptureService};
+pub use windows_capture::{
+    enumerate_monitors, CaptureConfig, MonitorInfo, MonitorSelectionMode, MonitorSelector,
+    WindowsCaptureService,
+};
 
 /// Service for capturing screen frames.
 ///

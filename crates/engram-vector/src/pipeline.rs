@@ -14,7 +14,7 @@ use engram_core::error::EngramError;
 use engram_core::safety::{SafetyDecision, SafetyGate};
 use engram_core::types::{AudioChunk, DictationEntry, ScreenFrame};
 
-use engram_storage::{AudioRepository, CaptureRepository, Database, DictationRepository};
+use engram_storage::{AudioRepository, CaptureRepository, Database, DictationRepository, VectorMetadata, VectorMetadataRepository};
 
 use crate::embedding::{DynEmbeddingService, EmbeddingService};
 use crate::index::VectorIndex;
@@ -227,7 +227,7 @@ impl EngramPipeline {
         let embedding = self.embedder.embed_boxed(&safe_text).await?;
 
         // Step 3: Check for duplicates.
-        if self.index.len() > 0 {
+        if !self.index.is_empty() {
             let hits = self.index.search(&embedding, 1)?;
             if let Some(top_hit) = hits.first() {
                 if top_hit.score >= self.dedup_threshold {
@@ -248,7 +248,31 @@ impl EngramPipeline {
         }
 
         // Step 4: Store in the vector index.
-        self.index.insert(id, embedding, metadata)?;
+        let embedding_dims = embedding.len() as u32;
+        self.index.insert(id, embedding, metadata.clone())?;
+
+        // Step 5: Write vector metadata to SQLite (if database attached).
+        if let Some(db) = &self.database {
+            let content_type = metadata
+                .get("content_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let source_id = id.to_string();
+            let now = chrono::Utc::now();
+            let meta = VectorMetadata {
+                id,
+                content_type,
+                source_id,
+                dimensions: embedding_dims,
+                format: "float32".to_string(),
+                created_at: now,
+                updated_at: now,
+            };
+            if let Err(e) = VectorMetadataRepository::new(Arc::clone(db)).save(&meta) {
+                debug!(id = %id, error = %e, "Failed to save vector metadata (non-fatal)");
+            }
+        }
 
         let result = if redaction_count > 0 {
             info!(id = %id, redaction_count, "Entry ingested with PII redacted");
@@ -516,6 +540,7 @@ mod tests {
             pii_detection: false,
             credit_card_redaction: false,
             ssn_redaction: false,
+            phone_redaction: false,
             custom_deny_patterns: vec![],
         };
         let pipeline = make_pipeline_with_safety(config);
@@ -656,5 +681,63 @@ mod tests {
         let result = pipeline.ingest_screen(frame).await.unwrap();
         assert!(matches!(result, IngestResult::Stored { .. }));
         assert_eq!(pipeline.index().len(), 1);
+    }
+
+    // -- Vector metadata wiring tests --
+
+    #[tokio::test]
+    async fn test_dual_write_creates_vector_metadata() {
+        let (pipeline, db) = make_pipeline_with_db();
+        let frame = make_screen_frame("Content for metadata tracking");
+        let id = frame.id;
+
+        let result = pipeline.ingest_screen(frame).await.unwrap();
+        assert!(matches!(result, IngestResult::Stored { .. }));
+
+        // Verify vector metadata was written to SQLite.
+        let repo = VectorMetadataRepository::new(db);
+        let meta = repo.find_by_id(id).unwrap();
+        assert!(meta.is_some(), "Vector metadata should be written on ingest");
+        let meta = meta.unwrap();
+        assert_eq!(meta.content_type, "screen");
+        assert_eq!(meta.format, "float32");
+        assert!(meta.dimensions > 0);
+    }
+
+    #[tokio::test]
+    async fn test_metadata_not_written_for_denied_content() {
+        let config = SafetyConfig {
+            custom_deny_patterns: vec!["BLOCKED".to_string()],
+            ..Default::default()
+        };
+        let db = Arc::new(Database::in_memory().unwrap());
+        let pipeline = EngramPipeline::new(
+            Arc::new(VectorIndex::new()),
+            MockEmbedding::new(),
+            config,
+            0.95,
+        )
+        .with_database(Arc::clone(&db));
+
+        let frame = make_screen_frame("This is BLOCKED content");
+        let id = frame.id;
+
+        let result = pipeline.ingest_screen(frame).await.unwrap();
+        assert!(matches!(result, IngestResult::Denied { .. }));
+
+        // No metadata should be written for denied content.
+        let repo = VectorMetadataRepository::new(db);
+        assert!(repo.find_by_id(id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_metadata_not_written_without_database() {
+        // Pipeline without database should not attempt metadata writes.
+        let pipeline = make_pipeline();
+        let frame = make_screen_frame("Content without db");
+
+        let result = pipeline.ingest_screen(frame).await.unwrap();
+        assert!(matches!(result, IngestResult::Stored { .. }));
+        // No panic or error -- metadata write silently skipped.
     }
 }

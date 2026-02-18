@@ -8,6 +8,24 @@
 
 use crate::config::SafetyConfig;
 
+/// Type of PII detected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PiiType {
+    Email,
+    CreditCard,
+    Ssn,
+    PhoneNumber,
+}
+
+/// A detected PII match with position and redaction token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PiiMatch {
+    pub pii_type: PiiType,
+    pub start: usize,
+    pub end: usize,
+    pub redacted_token: &'static str,
+}
+
 /// Decision made by the safety gate about a piece of content.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SafetyDecision {
@@ -75,6 +93,14 @@ impl SafetyGate {
             }
         }
 
+        if self.config.phone_redaction {
+            let (new_text, count) = redact_phone_numbers(&redacted);
+            if count > 0 {
+                redacted = new_text;
+                total_redactions += count;
+            }
+        }
+
         if total_redactions > 0 {
             SafetyDecision::Redacted {
                 text: redacted,
@@ -121,7 +147,7 @@ fn luhn_check(digits: &[u32]) -> bool {
             }
         })
         .sum();
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 /// Detect and redact sequences of 13-19 digits that look like credit card numbers.
@@ -286,6 +312,180 @@ fn is_email_local_char(c: char) -> bool {
 
 fn is_email_domain_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '.' || c == '-'
+}
+
+/// Detect and redact US phone numbers in various formats.
+///
+/// Supported formats:
+/// - `(NNN) NNN-NNNN` and `(NNN)NNN-NNNN`
+/// - `NNN-NNN-NNNN`
+/// - `+1NNNNNNNNNN`
+/// - `+1 NNN NNN NNNN`
+/// - `NNN.NNN.NNNN`
+///
+/// Boundary guards prevent false positives on IP addresses, version numbers,
+/// order numbers, part numbers, and URL path segments.
+pub fn redact_phone_numbers(text: &str) -> (String, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut result = String::with_capacity(text.len());
+    let mut count = 0;
+    let mut i = 0;
+
+    while i < len {
+        // Try to match a phone number at position i.
+        if let Some(end) = try_match_phone(&chars, i, len) {
+            // Boundary check: character before must not be alphanumeric, '/', '#', or '@'.
+            let bad_prefix = if i > 0 {
+                let prev = chars[i - 1];
+                prev.is_ascii_alphanumeric() || prev == '/' || prev == '#' || prev == '@'
+            } else {
+                false
+            };
+
+            // Boundary check: character after must not be alphanumeric
+            // (punctuation like '.', ',', '!', '?' is allowed).
+            let bad_suffix = if end < len {
+                let next = chars[end];
+                next.is_ascii_alphanumeric()
+            } else {
+                false
+            };
+
+            if bad_prefix || bad_suffix {
+                result.push(chars[i]);
+                i += 1;
+            } else {
+                result.push_str("[REDACTED-PHONE]");
+                count += 1;
+                i = end;
+            }
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    (result, count)
+}
+
+/// Try to match a phone number starting at `pos`. Returns the end index if matched.
+fn try_match_phone(chars: &[char], pos: usize, len: usize) -> Option<usize> {
+    // Format: +1NNNNNNNNNN or +1 NNN NNN NNNN
+    if chars[pos] == '+' && pos + 1 < len && chars[pos + 1] == '1' {
+        // +1NNNNNNNNNN (12 chars: +1 followed by 10 digits)
+        if pos + 12 <= len {
+            let all_digits = (2..12).all(|j| chars[pos + j].is_ascii_digit());
+            if all_digits {
+                // Make sure this isn't part of a longer digit string
+                if pos + 12 < len && chars[pos + 12].is_ascii_digit() {
+                    return None;
+                }
+                return Some(pos + 12);
+            }
+        }
+        // +1 NNN NNN NNNN (15 chars: +1 space NNN space NNN space NNNN)
+        if pos + 15 <= len
+            && chars[pos + 2] == ' '
+            && chars[pos + 3].is_ascii_digit()
+            && chars[pos + 4].is_ascii_digit()
+            && chars[pos + 5].is_ascii_digit()
+            && chars[pos + 6] == ' '
+            && chars[pos + 7].is_ascii_digit()
+            && chars[pos + 8].is_ascii_digit()
+            && chars[pos + 9].is_ascii_digit()
+            && chars[pos + 10] == ' '
+            && chars[pos + 11].is_ascii_digit()
+            && chars[pos + 12].is_ascii_digit()
+            && chars[pos + 13].is_ascii_digit()
+            && chars[pos + 14].is_ascii_digit()
+        {
+            return Some(pos + 15);
+        }
+        return None;
+    }
+
+    // Format: (NNN) NNN-NNNN or (NNN)NNN-NNNN
+    if chars[pos] == '(' {
+        // Need at least (NNN)NNN-NNNN = 13 chars
+        if pos + 13 <= len
+            && chars[pos + 1].is_ascii_digit()
+            && chars[pos + 2].is_ascii_digit()
+            && chars[pos + 3].is_ascii_digit()
+            && chars[pos + 4] == ')'
+        {
+            // (NNN) NNN-NNNN (14 chars)
+            if pos + 14 <= len
+                && chars[pos + 5] == ' '
+                && chars[pos + 6].is_ascii_digit()
+                && chars[pos + 7].is_ascii_digit()
+                && chars[pos + 8].is_ascii_digit()
+                && chars[pos + 9] == '-'
+                && chars[pos + 10].is_ascii_digit()
+                && chars[pos + 11].is_ascii_digit()
+                && chars[pos + 12].is_ascii_digit()
+                && chars[pos + 13].is_ascii_digit()
+            {
+                return Some(pos + 14);
+            }
+            // (NNN)NNN-NNNN (13 chars)
+            if chars[pos + 5].is_ascii_digit()
+                && chars[pos + 6].is_ascii_digit()
+                && chars[pos + 7].is_ascii_digit()
+                && chars[pos + 8] == '-'
+                && chars[pos + 9].is_ascii_digit()
+                && chars[pos + 10].is_ascii_digit()
+                && chars[pos + 11].is_ascii_digit()
+                && chars[pos + 12].is_ascii_digit()
+            {
+                return Some(pos + 13);
+            }
+        }
+        return None;
+    }
+
+    // Digit-starting formats: NNN-NNN-NNNN or NNN.NNN.NNNN
+    if chars[pos].is_ascii_digit() {
+        // Need 3 digits first
+        if pos + 2 < len && chars[pos + 1].is_ascii_digit() && chars[pos + 2].is_ascii_digit() {
+            let sep_pos = pos + 3;
+            if sep_pos < len {
+                let sep = chars[sep_pos];
+                if sep == '-' || sep == '.' {
+                    // NNN{sep}NNN{sep}NNNN
+                    if sep_pos + 8 <= len
+                        && chars[sep_pos + 1].is_ascii_digit()
+                        && chars[sep_pos + 2].is_ascii_digit()
+                        && chars[sep_pos + 3].is_ascii_digit()
+                        && chars[sep_pos + 4] == sep
+                        && chars[sep_pos + 5].is_ascii_digit()
+                        && chars[sep_pos + 6].is_ascii_digit()
+                        && chars[sep_pos + 7].is_ascii_digit()
+                        && chars[sep_pos + 8].is_ascii_digit()
+                    {
+                        let end = sep_pos + 9;
+
+                        // For dot-separated: guard against IP addresses (4 groups)
+                        // and version numbers. IP = N+.N+.N+.N+ (4 dot-separated groups).
+                        if sep == '.' {
+                            // Check if there's a 4th dot-separated group after.
+                            if end < len && chars[end] == '.' {
+                                return None; // Likely IP or version
+                            }
+                            // Check if there's a dot-separated group before.
+                            if pos > 0 && chars[pos - 1] == '.' {
+                                return None; // Likely IP or version
+                            }
+                        }
+
+                        return Some(end);
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -553,5 +753,420 @@ mod tests {
         let gate = default_gate();
         let decision = gate.check("number 1234567890123456 end");
         assert_eq!(decision, SafetyDecision::Allow);
+    }
+
+    // =========================================================================
+    // Phone number redaction tests
+    // =========================================================================
+
+    // --- Format detection ---
+
+    #[test]
+    fn test_phone_parens_space() {
+        let (text, count) = redact_phone_numbers("call (555) 123-4567 now");
+        assert_eq!(text, "call [REDACTED-PHONE] now");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_parens_no_space() {
+        let (text, count) = redact_phone_numbers("call (555)123-4567 now");
+        assert_eq!(text, "call [REDACTED-PHONE] now");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_dashes() {
+        let (text, count) = redact_phone_numbers("call 555-123-4567 now");
+        assert_eq!(text, "call [REDACTED-PHONE] now");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_plus_one() {
+        let (text, count) = redact_phone_numbers("call +15551234567 now");
+        assert_eq!(text, "call [REDACTED-PHONE] now");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_plus_one_spaces() {
+        let (text, count) = redact_phone_numbers("call +1 555 123 4567 now");
+        assert_eq!(text, "call [REDACTED-PHONE] now");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_dots() {
+        let (text, count) = redact_phone_numbers("call 555.123.4567 now");
+        assert_eq!(text, "call [REDACTED-PHONE] now");
+        assert_eq!(count, 1);
+    }
+
+    // --- Multiple phones ---
+
+    #[test]
+    fn test_phone_multiple() {
+        let (text, count) =
+            redact_phone_numbers("home 555-123-4567 work (800) 555-1234");
+        assert_eq!(
+            text,
+            "home [REDACTED-PHONE] work [REDACTED-PHONE]"
+        );
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_phone_three_different_formats() {
+        let (text, count) =
+            redact_phone_numbers("a 555-111-2222, b (555)333-4444, c +15555556666");
+        assert_eq!(
+            text,
+            "a [REDACTED-PHONE], b [REDACTED-PHONE], c [REDACTED-PHONE]"
+        );
+        assert_eq!(count, 3);
+    }
+
+    // --- Position tests ---
+
+    #[test]
+    fn test_phone_at_start() {
+        let (text, count) = redact_phone_numbers("555-123-4567 is my number");
+        assert_eq!(text, "[REDACTED-PHONE] is my number");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_at_end() {
+        let (text, count) = redact_phone_numbers("my number is 555-123-4567");
+        assert_eq!(text, "my number is [REDACTED-PHONE]");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_only() {
+        let (text, count) = redact_phone_numbers("555-123-4567");
+        assert_eq!(text, "[REDACTED-PHONE]");
+        assert_eq!(count, 1);
+    }
+
+    // --- Punctuation neighbors ---
+
+    #[test]
+    fn test_phone_followed_by_period() {
+        let (text, count) = redact_phone_numbers("Call 555-123-4567.");
+        assert_eq!(text, "Call [REDACTED-PHONE].");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_followed_by_comma() {
+        let (text, count) = redact_phone_numbers("Call 555-123-4567, please");
+        assert_eq!(text, "Call [REDACTED-PHONE], please");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_followed_by_exclamation() {
+        let (text, count) = redact_phone_numbers("Call 555-123-4567!");
+        assert_eq!(text, "Call [REDACTED-PHONE]!");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_followed_by_question() {
+        let (text, count) = redact_phone_numbers("Is it 555-123-4567?");
+        assert_eq!(text, "Is it [REDACTED-PHONE]?");
+        assert_eq!(count, 1);
+    }
+
+    // --- False positive guards ---
+
+    #[test]
+    fn test_no_redact_ip_address() {
+        let (text, count) = redact_phone_numbers("server at 192.168.1.100");
+        assert_eq!(text, "server at 192.168.1.100");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_no_redact_ip_address_2() {
+        let (text, count) = redact_phone_numbers("IP 10.0.0.1 is local");
+        assert_eq!(text, "IP 10.0.0.1 is local");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_no_redact_version_4_groups() {
+        // 4 dot-separated groups should not be redacted
+        let (text, count) = redact_phone_numbers("version 1.234.567.8901");
+        assert_eq!(text, "version 1.234.567.8901");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_no_redact_version_prefix_dot() {
+        // A dot before NNN.NNN.NNNN means it's likely a version
+        let (text, count) = redact_phone_numbers("v2.0.3.4567");
+        assert_eq!(text, "v2.0.3.4567");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_no_redact_url_path() {
+        let (text, count) =
+            redact_phone_numbers("http://api.com/users/5551234567/profile");
+        // The /5551234567/ has a leading '/' so should not be redacted
+        assert_eq!(text, "http://api.com/users/5551234567/profile");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_no_redact_order_number() {
+        let (text, count) = redact_phone_numbers("order #1234567890");
+        assert_eq!(text, "order #1234567890");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_no_redact_currency() {
+        // $1,234,567.89 — no phone-shaped patterns here
+        let (text, count) = redact_phone_numbers("price $1,234,567.89");
+        assert_eq!(text, "price $1,234,567.89");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_no_redact_part_number_prefix() {
+        // A555-123-4567B — alphanumeric prefix and suffix
+        let (text, count) = redact_phone_numbers("part A555-123-4567B");
+        assert_eq!(text, "part A555-123-4567B");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_no_redact_part_number_suffix_only() {
+        let (text, count) = redact_phone_numbers("part 555-123-4567B");
+        assert_eq!(text, "part 555-123-4567B");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_no_redact_part_number_prefix_only() {
+        let (text, count) = redact_phone_numbers("part A555-123-4567");
+        assert_eq!(text, "part A555-123-4567");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_no_redact_at_prefix() {
+        let (text, count) = redact_phone_numbers("user @555-123-4567");
+        assert_eq!(text, "user @555-123-4567");
+        assert_eq!(count, 0);
+    }
+
+    // --- Config toggle ---
+
+    #[test]
+    fn test_phone_redaction_disabled() {
+        let config = SafetyConfig {
+            phone_redaction: false,
+            ..Default::default()
+        };
+        let gate = SafetyGate::new(config);
+        let decision = gate.check("call 555-123-4567 now");
+        assert_eq!(decision, SafetyDecision::Allow);
+    }
+
+    #[test]
+    fn test_phone_redaction_enabled_via_gate() {
+        let gate = default_gate();
+        let decision = gate.check("call 555-123-4567 now");
+        match decision {
+            SafetyDecision::Redacted { text, redaction_count } => {
+                assert_eq!(text, "call [REDACTED-PHONE] now");
+                assert_eq!(redaction_count, 1);
+            }
+            other => panic!("Expected Redacted, got {:?}", other),
+        }
+    }
+
+    // --- Combined with other PII types ---
+
+    #[test]
+    fn test_phone_and_email_combined() {
+        let gate = default_gate();
+        let decision =
+            gate.check("email user@test.com phone 555-123-4567");
+        match decision {
+            SafetyDecision::Redacted { text, redaction_count } => {
+                assert!(text.contains("[EMAIL_REDACTED]"));
+                assert!(text.contains("[REDACTED-PHONE]"));
+                assert_eq!(redaction_count, 2);
+            }
+            other => panic!("Expected Redacted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phone_and_ssn_combined() {
+        let gate = default_gate();
+        let decision =
+            gate.check("ssn 123-45-6789 phone (555) 123-4567");
+        match decision {
+            SafetyDecision::Redacted { text, redaction_count } => {
+                assert!(text.contains("[SSN_REDACTED]"));
+                assert!(text.contains("[REDACTED-PHONE]"));
+                assert_eq!(redaction_count, 2);
+            }
+            other => panic!("Expected Redacted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_phone_email_ssn_all_combined() {
+        let gate = default_gate();
+        let decision = gate.check(
+            "ssn 123-45-6789, email a@b.com, phone 555-123-4567",
+        );
+        match decision {
+            SafetyDecision::Redacted { text, redaction_count } => {
+                assert!(text.contains("[SSN_REDACTED]"));
+                assert!(text.contains("[EMAIL_REDACTED]"));
+                assert!(text.contains("[REDACTED-PHONE]"));
+                assert_eq!(redaction_count, 3);
+            }
+            other => panic!("Expected Redacted, got {:?}", other),
+        }
+    }
+
+    // --- Edge cases ---
+
+    #[test]
+    fn test_phone_empty_string() {
+        let (text, count) = redact_phone_numbers("");
+        assert_eq!(text, "");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_phone_no_phone() {
+        let (text, count) = redact_phone_numbers("no phone numbers here");
+        assert_eq!(text, "no phone numbers here");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_phone_short_numbers_not_matched() {
+        let (text, count) = redact_phone_numbers("123-456 is too short");
+        assert_eq!(text, "123-456 is too short");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_phone_parens_with_newline() {
+        let (text, count) = redact_phone_numbers("line1\n(555) 123-4567\nline3");
+        assert_eq!(text, "line1\n[REDACTED-PHONE]\nline3");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_in_sentence_context() {
+        let (text, count) =
+            redact_phone_numbers("Please reach us at (800) 555-1234 during business hours.");
+        assert_eq!(
+            text,
+            "Please reach us at [REDACTED-PHONE] during business hours."
+        );
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_plus_one_at_start() {
+        let (text, count) = redact_phone_numbers("+15551234567");
+        assert_eq!(text, "[REDACTED-PHONE]");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_plus_one_spaces_at_end() {
+        let (text, count) = redact_phone_numbers("fax: +1 800 555 1234");
+        assert_eq!(text, "fax: [REDACTED-PHONE]");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_phone_dots_at_start() {
+        let (text, count) = redact_phone_numbers("555.123.4567 is the number");
+        assert_eq!(text, "[REDACTED-PHONE] is the number");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_no_redact_hash_prefix_dashes() {
+        let (text, count) = redact_phone_numbers("#555-123-4567");
+        assert_eq!(text, "#555-123-4567");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_no_redact_slash_prefix() {
+        let (text, count) = redact_phone_numbers("/5551234567");
+        // +1 format requires + prefix, this is just digits after /
+        assert_eq!(text, "/5551234567");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_phone_pii_type_and_match() {
+        // Test PiiType and PiiMatch structs exist and are usable
+        let m = PiiMatch {
+            pii_type: PiiType::PhoneNumber,
+            start: 0,
+            end: 12,
+            redacted_token: "[REDACTED-PHONE]",
+        };
+        assert_eq!(m.pii_type, PiiType::PhoneNumber);
+        assert_eq!(m.start, 0);
+        assert_eq!(m.end, 12);
+        assert_eq!(m.redacted_token, "[REDACTED-PHONE]");
+    }
+
+    #[test]
+    fn test_pii_type_variants() {
+        assert_ne!(PiiType::Email, PiiType::CreditCard);
+        assert_ne!(PiiType::Ssn, PiiType::PhoneNumber);
+        let phone = PiiType::PhoneNumber;
+        assert_eq!(phone, PiiType::PhoneNumber);
+    }
+
+    #[test]
+    fn test_phone_consecutive() {
+        let (text, count) =
+            redact_phone_numbers("555-111-2222 555-333-4444");
+        assert_eq!(text, "[REDACTED-PHONE] [REDACTED-PHONE]");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_phone_with_tab() {
+        let (text, count) = redact_phone_numbers("tab\t555-123-4567\there");
+        assert_eq!(text, "tab\t[REDACTED-PHONE]\there");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_no_redact_too_many_digits_plus_one() {
+        // +1 followed by 11 digits (too many)
+        let (text, count) = redact_phone_numbers("+155512345670");
+        assert_eq!(text, "+155512345670");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_phone_redact_method() {
+        let gate = default_gate();
+        let result = gate.redact("call 555-123-4567");
+        assert_eq!(result, "call [REDACTED-PHONE]");
     }
 }

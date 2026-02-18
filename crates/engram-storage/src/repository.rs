@@ -393,6 +393,100 @@ impl DictationRepository {
     }
 }
 
+/// Metadata record for a stored vector embedding.
+#[derive(Debug, Clone)]
+pub struct VectorMetadata {
+    pub id: Uuid,
+    pub content_type: String,
+    pub source_id: String,
+    pub dimensions: u32,
+    pub format: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Repository for vector metadata entries.
+pub struct VectorMetadataRepository {
+    db: Arc<Database>,
+}
+
+impl VectorMetadataRepository {
+    pub fn new(db: Arc<Database>) -> Self {
+        Self { db }
+    }
+
+    /// Store a vector metadata entry.
+    pub fn save(&self, meta: &VectorMetadata) -> Result<(), EngramError> {
+        self.db.with_conn(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO vectors_metadata (id, content_type, source_id, dimensions, format, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    meta.id.to_string(),
+                    meta.content_type,
+                    meta.source_id,
+                    meta.dimensions,
+                    meta.format,
+                    meta.created_at.timestamp(),
+                    meta.updated_at.timestamp(),
+                ],
+            )
+            .map_err(|e| EngramError::Storage(format!("Failed to save vector metadata: {}", e)))?;
+            Ok(())
+        })
+    }
+
+    /// Find vector metadata by ID.
+    pub fn find_by_id(&self, id: Uuid) -> Result<Option<VectorMetadata>, EngramError> {
+        self.db.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, content_type, source_id, dimensions, format, created_at, updated_at
+                     FROM vectors_metadata WHERE id = ?1",
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+
+            let result = stmt
+                .query_row(rusqlite::params![id.to_string()], |row| {
+                    Ok(row_to_vector_metadata(row))
+                })
+                .optional()
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+
+            match result {
+                Some(meta) => Ok(Some(meta?)),
+                None => Ok(None),
+            }
+        })
+    }
+
+    /// Find vector metadata entries by source ID.
+    pub fn find_by_source(&self, source_id: &str) -> Result<Vec<VectorMetadata>, EngramError> {
+        self.db.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, content_type, source_id, dimensions, format, created_at, updated_at
+                     FROM vectors_metadata WHERE source_id = ?1
+                     ORDER BY created_at DESC",
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+
+            let rows = stmt
+                .query_map(rusqlite::params![source_id], |row| {
+                    Ok(row_to_vector_metadata(row))
+                })
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+
+            let mut entries = Vec::new();
+            for row in rows {
+                let meta = row.map_err(|e| EngramError::Storage(e.to_string()))??;
+                entries.push(meta);
+            }
+            Ok(entries)
+        })
+    }
+}
+
 // ============================================================================
 // Helper functions for row-to-entity conversion.
 // ============================================================================
@@ -527,6 +621,49 @@ fn row_to_dictation_entry(
         target_window: target_window.unwrap_or_default(),
         duration_secs: duration_secs.unwrap_or(0.0) as f32,
         mode,
+    })
+}
+
+fn row_to_vector_metadata(
+    row: &rusqlite::Row<'_>,
+) -> Result<VectorMetadata, EngramError> {
+    let id_str: String = row
+        .get(0)
+        .map_err(|e| EngramError::Storage(e.to_string()))?;
+    let content_type: String = row
+        .get(1)
+        .map_err(|e| EngramError::Storage(e.to_string()))?;
+    let source_id: String = row
+        .get(2)
+        .map_err(|e| EngramError::Storage(e.to_string()))?;
+    let dimensions: u32 = row
+        .get(3)
+        .map_err(|e| EngramError::Storage(e.to_string()))?;
+    let format: String = row
+        .get(4)
+        .map_err(|e| EngramError::Storage(e.to_string()))?;
+    let created_at_i64: i64 = row
+        .get(5)
+        .map_err(|e| EngramError::Storage(e.to_string()))?;
+    let updated_at_i64: i64 = row
+        .get(6)
+        .map_err(|e| EngramError::Storage(e.to_string()))?;
+
+    Ok(VectorMetadata {
+        id: Uuid::parse_str(&id_str)
+            .map_err(|e| EngramError::Storage(format!("Invalid UUID: {}", e)))?,
+        content_type,
+        source_id,
+        dimensions,
+        format,
+        created_at: Utc
+            .timestamp_opt(created_at_i64, 0)
+            .single()
+            .unwrap_or_default(),
+        updated_at: Utc
+            .timestamp_opt(updated_at_i64, 0)
+            .single()
+            .unwrap_or_default(),
     })
 }
 
@@ -783,6 +920,93 @@ mod tests {
 
         let results = repo.find_by_app("VSCode", 100).unwrap();
         assert_eq!(results.len(), 0);
+    }
+
+    // ========================================================================
+    // VectorMetadataRepository tests
+    // ========================================================================
+
+    fn make_vector_metadata() -> VectorMetadata {
+        VectorMetadata {
+            id: Uuid::new_v4(),
+            content_type: "screen".to_string(),
+            source_id: "capture-123".to_string(),
+            dimensions: 384,
+            format: "f32".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_vector_metadata_save_and_find() {
+        let db = make_db();
+        let repo = VectorMetadataRepository::new(db);
+
+        let meta = make_vector_metadata();
+        let id = meta.id;
+
+        repo.save(&meta).unwrap();
+
+        let found = repo.find_by_id(id).unwrap().unwrap();
+        assert_eq!(found.id, id);
+        assert_eq!(found.content_type, "screen");
+        assert_eq!(found.source_id, "capture-123");
+        assert_eq!(found.dimensions, 384);
+        assert_eq!(found.format, "f32");
+    }
+
+    #[test]
+    fn test_vector_metadata_find_nonexistent() {
+        let db = make_db();
+        let repo = VectorMetadataRepository::new(db);
+        let result = repo.find_by_id(Uuid::new_v4()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_vector_metadata_find_by_source() {
+        let db = make_db();
+        let repo = VectorMetadataRepository::new(db);
+
+        let mut meta1 = make_vector_metadata();
+        meta1.source_id = "src-a".to_string();
+
+        let mut meta2 = make_vector_metadata();
+        meta2.source_id = "src-a".to_string();
+
+        let mut meta3 = make_vector_metadata();
+        meta3.source_id = "src-b".to_string();
+
+        repo.save(&meta1).unwrap();
+        repo.save(&meta2).unwrap();
+        repo.save(&meta3).unwrap();
+
+        let results = repo.find_by_source("src-a").unwrap();
+        assert_eq!(results.len(), 2);
+
+        let results = repo.find_by_source("src-b").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = repo.find_by_source("src-none").unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_vector_metadata_upsert() {
+        let db = make_db();
+        let repo = VectorMetadataRepository::new(db);
+
+        let mut meta = make_vector_metadata();
+        let id = meta.id;
+        repo.save(&meta).unwrap();
+
+        // Update the format.
+        meta.format = "int8".to_string();
+        repo.save(&meta).unwrap();
+
+        let found = repo.find_by_id(id).unwrap().unwrap();
+        assert_eq!(found.format, "int8");
     }
 
     #[test]

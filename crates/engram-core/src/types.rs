@@ -19,7 +19,7 @@ pub enum ContentType {
 }
 
 /// Dictation output mode.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DictationMode {
     /// Inject text into the focused window only.
@@ -27,15 +27,10 @@ pub enum DictationMode {
     /// Store text in the database only (voice memo).
     StoreOnly,
     /// Both inject and store (default).
+    #[default]
     TypeAndStore,
     /// Copy text to clipboard (for apps that reject SendInput).
     Clipboard,
-}
-
-impl Default for DictationMode {
-    fn default() -> Self {
-        Self::TypeAndStore
-    }
 }
 
 /// Capture system operational status.
@@ -140,78 +135,53 @@ pub enum QueryRoute {
 }
 
 /// Voice Activity Detection sensitivity level.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VadSensitivity {
     Low,
+    #[default]
     Medium,
     High,
 }
 
-impl Default for VadSensitivity {
-    fn default() -> Self {
-        Self::Medium
-    }
-}
-
 /// OCR engine selection.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OcrEngineType {
+    #[default]
     WindowsNative,
     Tesseract,
 }
 
-impl Default for OcrEngineType {
-    fn default() -> Self {
-        Self::WindowsNative
-    }
-}
-
 /// Position of the dictation overlay indicator.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OverlayPosition {
+    #[default]
     Cursor,
     TopRight,
     BottomRight,
 }
 
-impl Default for OverlayPosition {
-    fn default() -> Self {
-        Self::Cursor
-    }
-}
-
 /// Application log level.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogLevel {
     Trace,
     Debug,
+    #[default]
     Info,
     Warn,
     Error,
 }
 
-impl Default for LogLevel {
-    fn default() -> Self {
-        Self::Info
-    }
-}
-
 /// VAD engine selection.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VadEngine {
+    #[default]
     Silero,
     Webrtc,
-}
-
-impl Default for VadEngine {
-    fn default() -> Self {
-        Self::Silero
-    }
 }
 
 /// Reason a screen frame was skipped.

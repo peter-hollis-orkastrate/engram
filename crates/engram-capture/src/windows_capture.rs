@@ -3,6 +3,9 @@
 //! On Windows, captures screenshots using BitBlt and detects the foreground
 //! window using GetForegroundWindow + GetWindowTextW + process name lookup.
 //! On non-Windows platforms, returns `EngramError::Capture`.
+//!
+//! Multi-monitor support: use [`enumerate_monitors`] to discover connected
+//! displays and [`MonitorSelector`] to cycle through them.
 
 use std::path::PathBuf;
 
@@ -22,6 +25,195 @@ use engram_core::types::ScreenFrame;
 
 use crate::CaptureService;
 
+// =============================================================================
+// Monitor types
+// =============================================================================
+
+/// Information about a connected display monitor.
+#[derive(Debug, Clone)]
+pub struct MonitorInfo {
+    /// Monitor index (0 = primary).
+    pub index: usize,
+    /// Display name from the OS.
+    pub name: String,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// DPI scaling factor.
+    pub dpi: u32,
+    /// Whether this is the primary monitor.
+    pub is_primary: bool,
+}
+
+/// How the [`MonitorSelector`] picks which monitor to capture next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonitorSelectionMode {
+    /// Capture a specific monitor by index.
+    Single(usize),
+    /// Round-robin through all monitors.
+    RoundRobin,
+}
+
+/// Selects which monitor to capture next.
+///
+/// For [`MonitorSelectionMode::Single`] the same monitor is returned every
+/// time. For [`MonitorSelectionMode::RoundRobin`] it cycles through all
+/// discovered monitors.
+pub struct MonitorSelector {
+    monitors: Vec<MonitorInfo>,
+    current: usize,
+    mode: MonitorSelectionMode,
+}
+
+impl MonitorSelector {
+    /// Create a new selector over `monitors` with the given `mode`.
+    pub fn new(monitors: Vec<MonitorInfo>, mode: MonitorSelectionMode) -> Self {
+        Self {
+            monitors,
+            current: 0,
+            mode,
+        }
+    }
+
+    /// Get the next monitor to capture.
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Option<&MonitorInfo> {
+        if self.monitors.is_empty() {
+            return None;
+        }
+        match self.mode {
+            MonitorSelectionMode::Single(idx) => self.monitors.get(idx).or_else(|| {
+                tracing::warn!(idx, "Monitor index out of range, falling back to primary");
+                self.monitors.first()
+            }),
+            MonitorSelectionMode::RoundRobin => {
+                let monitor = &self.monitors[self.current % self.monitors.len()];
+                self.current += 1;
+                Some(monitor)
+            }
+        }
+    }
+
+    /// Get the effective FPS for the current mode.
+    ///
+    /// In round-robin mode the base FPS is divided by the number of monitors
+    /// so that each monitor is captured at `base_fps / N`.
+    pub fn effective_fps(&self, base_fps: f64) -> f64 {
+        match self.mode {
+            MonitorSelectionMode::Single(_) => base_fps,
+            MonitorSelectionMode::RoundRobin => {
+                if self.monitors.len() <= 1 {
+                    base_fps
+                } else {
+                    base_fps / self.monitors.len() as f64
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Monitor enumeration
+// =============================================================================
+
+/// Enumerate all connected monitors.
+///
+/// On Windows, uses `EnumDisplayMonitors` to list connected displays.
+/// On non-Windows, returns a single mock primary monitor.
+#[cfg(not(target_os = "windows"))]
+pub fn enumerate_monitors() -> Vec<MonitorInfo> {
+    vec![MonitorInfo {
+        index: 0,
+        name: "Primary Monitor".to_string(),
+        width: 1920,
+        height: 1080,
+        dpi: 96,
+        is_primary: true,
+    }]
+}
+
+/// Enumerate all connected monitors.
+///
+/// Uses `EnumDisplayMonitors` + `GetMonitorInfoW` + `GetDpiForMonitor` to
+/// discover all connected displays with their resolution and DPI.
+#[cfg(target_os = "windows")]
+pub fn enumerate_monitors() -> Vec<MonitorInfo> {
+    use std::sync::Mutex;
+    use windows_sys::Win32::Graphics::Gdi::{
+        EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW,
+    };
+    use windows_sys::Win32::UI::HiDpi::GetDpiForMonitor;
+
+    // Accumulate monitors via the callback.
+    static MONITORS: Mutex<Vec<MonitorInfo>> = Mutex::new(Vec::new());
+
+    {
+        let mut guard = MONITORS.lock().unwrap();
+        guard.clear();
+    }
+
+    unsafe extern "system" fn callback(
+        hmonitor: isize,
+        _hdc: isize,
+        _rect: *mut windows_sys::Win32::Foundation::RECT,
+        _lparam: isize,
+    ) -> i32 {
+        let mut info: MONITORINFOEXW = std::mem::zeroed();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+
+        if GetMonitorInfoW(hmonitor, &mut info as *mut _ as *mut _) != 0 {
+            let rc = info.monitorInfo.rcMonitor;
+            let width = (rc.right - rc.left) as u32;
+            let height = (rc.bottom - rc.top) as u32;
+            let is_primary = (info.monitorInfo.dwFlags & 1) != 0; // MONITORINFOF_PRIMARY
+
+            let name = String::from_utf16_lossy(
+                &info.szDevice[..info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len())],
+            );
+
+            // Query real DPI for this monitor via GetDpiForMonitor.
+            // Falls back to 96 if the call fails.
+            let dpi = {
+                let mut dpi_x: u32 = 0;
+                let mut dpi_y: u32 = 0;
+                // SAFETY: GetDpiForMonitor is called with a valid monitor
+                // handle from the EnumDisplayMonitors callback. MDT_EFFECTIVE_DPI (0)
+                // returns the effective DPI for the monitor.
+                let hr = GetDpiForMonitor(hmonitor, 0, &mut dpi_x, &mut dpi_y);
+                if hr == 0 && dpi_x > 0 {
+                    dpi_x
+                } else {
+                    96u32
+                }
+            };
+
+            let mut guard = MONITORS.lock().unwrap();
+            let index = guard.len();
+            guard.push(MonitorInfo {
+                index,
+                name,
+                width,
+                height,
+                dpi,
+                is_primary,
+            });
+        }
+        1 // Continue enumeration
+    }
+
+    unsafe {
+        EnumDisplayMonitors(0, std::ptr::null(), Some(callback), 0);
+    }
+
+    let guard = MONITORS.lock().unwrap();
+    guard.clone()
+}
+
+// =============================================================================
+// CaptureConfig
+// =============================================================================
+
 /// Configuration for the Windows capture service.
 #[derive(Debug, Clone)]
 pub struct CaptureConfig {
@@ -29,8 +221,15 @@ pub struct CaptureConfig {
     pub screenshot_dir: PathBuf,
     /// Whether to save screenshots to disk (for OCR processing).
     pub save_screenshots: bool,
-    /// Monitor index to capture (0 = primary).
+    /// Monitor index to capture (0 = primary, `usize::MAX` = all monitors
+    /// in round-robin).
     pub monitor_index: usize,
+    /// Capture FPS. When capturing all monitors, FPS is divided by monitor
+    /// count.
+    pub fps: f64,
+    /// DPI of the target monitor (default 96). When > 96, capture
+    /// dimensions are scaled by `dpi / 96` to account for HiDPI displays.
+    pub dpi: u32,
 }
 
 impl Default for CaptureConfig {
@@ -39,6 +238,8 @@ impl Default for CaptureConfig {
             screenshot_dir: PathBuf::from("data/screenshots"),
             save_screenshots: false,
             monitor_index: 0,
+            fps: 1.0,
+            dpi: 96,
         }
     }
 }
@@ -70,9 +271,17 @@ impl WindowsCaptureService {
 // Windows implementation
 // =============================================================================
 
+/// DPI value used by the capture function to scale dimensions.
+/// Set by the `CaptureService` implementation before each capture.
+#[cfg(target_os = "windows")]
+static DPI_FOR_CAPTURE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(96);
+
 #[cfg(target_os = "windows")]
 impl CaptureService for WindowsCaptureService {
     async fn capture_frame(&self) -> Result<ScreenFrame, EngramError> {
+        // Store DPI for the capture function to use for dimension scaling.
+        DPI_FOR_CAPTURE.store(self.config.dpi, std::sync::atomic::Ordering::Relaxed);
+
         let (app_name, window_title) = unsafe { get_foreground_window_info() };
 
         // Capture screenshot as BMP bytes in memory.
@@ -167,8 +376,23 @@ unsafe fn capture_screen_to_bmp_bytes() -> Result<Vec<u8>, EngramError> {
         return Err(EngramError::Capture("Failed to get screen DC".into()));
     }
 
-    let width = GetSystemMetrics(SM_CXSCREEN);
-    let height = GetSystemMetrics(SM_CYSCREEN);
+    let raw_width = GetSystemMetrics(SM_CXSCREEN);
+    let raw_height = GetSystemMetrics(SM_CYSCREEN);
+
+    // Scale capture dimensions for HiDPI monitors. GetSystemMetrics
+    // returns logical pixels; multiply by dpi/96 to get physical pixels
+    // when DPI awareness is enabled.
+    let dpi = DPI_FOR_CAPTURE.load(std::sync::atomic::Ordering::Relaxed);
+    let (width, height) = if dpi > 96 {
+        let scale_num = dpi as i32;
+        let scale_den = 96i32;
+        (
+            raw_width * scale_num / scale_den,
+            raw_height * scale_num / scale_den,
+        )
+    } else {
+        (raw_width, raw_height)
+    };
 
     let hdc_mem = CreateCompatibleDC(hdc_screen);
     let hbm = CreateCompatibleBitmap(hdc_screen, width, height);
@@ -277,6 +501,8 @@ mod tests {
             screenshot_dir: PathBuf::from("/tmp/screenshots"),
             save_screenshots: true,
             monitor_index: 1,
+            fps: 2.0,
+            dpi: 96,
         };
         let service = WindowsCaptureService::new(config);
         assert_eq!(
@@ -303,8 +529,187 @@ mod tests {
             screenshot_dir: PathBuf::from("custom/dir"),
             save_screenshots: false,
             monitor_index: 2,
+            fps: 0.5,
+            dpi: 144,
         };
         assert_eq!(config.screenshot_dir, PathBuf::from("custom/dir"));
         assert_eq!(config.monitor_index, 2);
+    }
+
+    // =========================================================================
+    // Multi-monitor tests
+    // =========================================================================
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_enumerate_monitors_returns_at_least_one() {
+        let monitors = enumerate_monitors();
+        assert!(!monitors.is_empty());
+        assert_eq!(monitors[0].index, 0);
+        assert!(monitors[0].is_primary);
+        assert_eq!(monitors[0].width, 1920);
+        assert_eq!(monitors[0].height, 1080);
+        assert_eq!(monitors[0].dpi, 96);
+    }
+
+    #[test]
+    fn test_monitor_selector_single() {
+        let monitors = vec![
+            MonitorInfo {
+                index: 0,
+                name: "Primary".into(),
+                width: 1920,
+                height: 1080,
+                dpi: 96,
+                is_primary: true,
+            },
+            MonitorInfo {
+                index: 1,
+                name: "Secondary".into(),
+                width: 2560,
+                height: 1440,
+                dpi: 144,
+                is_primary: false,
+            },
+        ];
+        let mut selector = MonitorSelector::new(monitors, MonitorSelectionMode::Single(1));
+        let m = selector.next().unwrap();
+        assert_eq!(m.index, 1);
+        assert_eq!(m.name, "Secondary");
+        // Calling again returns the same monitor.
+        let m2 = selector.next().unwrap();
+        assert_eq!(m2.index, 1);
+    }
+
+    #[test]
+    fn test_monitor_selector_single_out_of_range() {
+        let monitors = vec![MonitorInfo {
+            index: 0,
+            name: "Primary".into(),
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            is_primary: true,
+        }];
+        let mut selector = MonitorSelector::new(monitors, MonitorSelectionMode::Single(5));
+        // Falls back to primary (index 0).
+        let m = selector.next().unwrap();
+        assert_eq!(m.index, 0);
+    }
+
+    #[test]
+    fn test_monitor_selector_round_robin() {
+        let monitors = vec![
+            MonitorInfo {
+                index: 0,
+                name: "A".into(),
+                width: 1920,
+                height: 1080,
+                dpi: 96,
+                is_primary: true,
+            },
+            MonitorInfo {
+                index: 1,
+                name: "B".into(),
+                width: 2560,
+                height: 1440,
+                dpi: 144,
+                is_primary: false,
+            },
+            MonitorInfo {
+                index: 2,
+                name: "C".into(),
+                width: 3840,
+                height: 2160,
+                dpi: 192,
+                is_primary: false,
+            },
+        ];
+        let mut selector = MonitorSelector::new(monitors, MonitorSelectionMode::RoundRobin);
+
+        assert_eq!(selector.next().unwrap().index, 0);
+        assert_eq!(selector.next().unwrap().index, 1);
+        assert_eq!(selector.next().unwrap().index, 2);
+        // Wraps around.
+        assert_eq!(selector.next().unwrap().index, 0);
+        assert_eq!(selector.next().unwrap().index, 1);
+    }
+
+    #[test]
+    fn test_monitor_selector_round_robin_single() {
+        let monitors = vec![MonitorInfo {
+            index: 0,
+            name: "Only".into(),
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            is_primary: true,
+        }];
+        let selector = MonitorSelector::new(monitors, MonitorSelectionMode::RoundRobin);
+        // With a single monitor, effective FPS equals base FPS.
+        assert!((selector.effective_fps(2.0) - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_effective_fps_single() {
+        let monitors = vec![
+            MonitorInfo {
+                index: 0,
+                name: "A".into(),
+                width: 1920,
+                height: 1080,
+                dpi: 96,
+                is_primary: true,
+            },
+            MonitorInfo {
+                index: 1,
+                name: "B".into(),
+                width: 2560,
+                height: 1440,
+                dpi: 144,
+                is_primary: false,
+            },
+        ];
+        let selector = MonitorSelector::new(monitors, MonitorSelectionMode::Single(0));
+        // Single mode: FPS unchanged regardless of monitor count.
+        assert!((selector.effective_fps(4.0) - 4.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_effective_fps_round_robin() {
+        let monitors = vec![
+            MonitorInfo {
+                index: 0,
+                name: "A".into(),
+                width: 1920,
+                height: 1080,
+                dpi: 96,
+                is_primary: true,
+            },
+            MonitorInfo {
+                index: 1,
+                name: "B".into(),
+                width: 2560,
+                height: 1440,
+                dpi: 144,
+                is_primary: false,
+            },
+        ];
+        let selector = MonitorSelector::new(monitors, MonitorSelectionMode::RoundRobin);
+        // 4.0 FPS / 2 monitors = 2.0 FPS per monitor.
+        assert!((selector.effective_fps(4.0) - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_capture_config_with_fps() {
+        let config = CaptureConfig::default();
+        assert!((config.fps - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_monitor_selector_empty() {
+        let mut selector =
+            MonitorSelector::new(Vec::new(), MonitorSelectionMode::RoundRobin);
+        assert!(selector.next().is_none());
     }
 }

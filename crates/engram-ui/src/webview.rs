@@ -9,6 +9,57 @@
 
 use engram_core::error::EngramError;
 
+/// Position hint for tray panel placement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskbarEdge {
+    /// Taskbar is at the bottom of the screen.
+    Bottom,
+    /// Taskbar is at the top of the screen.
+    Top,
+    /// Taskbar is on the left side of the screen.
+    Left,
+    /// Taskbar is on the right side of the screen.
+    Right,
+}
+
+/// Tracks the open/close state of the tray panel.
+pub struct TrayPanelState {
+    visible: bool,
+}
+
+impl TrayPanelState {
+    /// Create a new panel state (initially hidden).
+    pub fn new() -> Self {
+        Self { visible: false }
+    }
+
+    /// Returns `true` if the panel is currently visible.
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// Mark the panel as visible.
+    pub fn show(&mut self) {
+        self.visible = true;
+    }
+
+    /// Mark the panel as hidden.
+    pub fn hide(&mut self) {
+        self.visible = false;
+    }
+
+    /// Toggle the panel visibility.
+    pub fn toggle(&mut self) {
+        self.visible = !self.visible;
+    }
+}
+
+impl Default for TrayPanelState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Configuration for the tray panel webview.
 #[derive(Debug, Clone)]
 pub struct WebviewConfig {
@@ -20,6 +71,34 @@ pub struct WebviewConfig {
     pub title: String,
 }
 
+impl WebviewConfig {
+    /// Calculate panel position given a tray icon rect and taskbar edge.
+    ///
+    /// Returns `(x, y)` coordinates for the top-left corner of the panel
+    /// so that it appears anchored to the tray icon.
+    pub fn panel_position(
+        &self,
+        tray_x: i32,
+        tray_y: i32,
+        edge: TaskbarEdge,
+    ) -> (i32, i32) {
+        match edge {
+            TaskbarEdge::Bottom => {
+                (tray_x - self.width as i32 / 2, tray_y - self.height as i32)
+            }
+            TaskbarEdge::Top => {
+                (tray_x - self.width as i32 / 2, tray_y + 32)
+            }
+            TaskbarEdge::Left => {
+                (tray_x + 32, tray_y - self.height as i32 / 2)
+            }
+            TaskbarEdge::Right => {
+                (tray_x - self.width as i32, tray_y - self.height as i32 / 2)
+            }
+        }
+    }
+}
+
 impl Default for WebviewConfig {
     fn default() -> Self {
         Self {
@@ -27,6 +106,131 @@ impl Default for WebviewConfig {
             height: 500,
             title: "Engram".to_string(),
         }
+    }
+}
+
+/// Window handle wrapper that implements `HasWindowHandle`.
+///
+/// Required by wry 0.48+ which uses raw-window-handle 0.6 traits.
+///
+/// On Windows, this holds a real HWND created via `CreateWindowExW`.
+/// On non-Windows, this is a stub that returns an error (webview
+/// feature is Windows-only in practice).
+#[cfg(feature = "webview")]
+struct PlaceholderWindowHandle {
+    #[cfg(target_os = "windows")]
+    hwnd: isize,
+}
+
+#[cfg(all(feature = "webview", target_os = "windows"))]
+impl PlaceholderWindowHandle {
+    /// Create a real hidden Win32 window for webview hosting.
+    ///
+    /// Registers a minimal window class (once) and creates a frameless
+    /// popup window of the requested size. The window is initially hidden.
+    fn create_hidden_window(width: u32, height: u32) -> Result<Self, EngramError> {
+        use std::sync::Once;
+        use windows_sys::Win32::Foundation::HINSTANCE;
+        use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+        static REGISTER_CLASS: Once = Once::new();
+        // Wide-encoded class name: "EngramWebviewHost\0"
+        const CLASS_NAME: &[u16] = &[
+            b'E' as u16, b'n' as u16, b'g' as u16, b'r' as u16,
+            b'a' as u16, b'm' as u16, b'W' as u16, b'e' as u16,
+            b'b' as u16, b'v' as u16, b'i' as u16, b'e' as u16,
+            b'w' as u16, b'H' as u16, b'o' as u16, b's' as u16,
+            b't' as u16, 0,
+        ];
+
+        REGISTER_CLASS.call_once(|| {
+            // SAFETY: Registering a window class with valid pointers.
+            // DefWindowProcW is the default message handler. The class
+            // name is a static null-terminated wide string.
+            unsafe {
+                let wc = WNDCLASSEXW {
+                    cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                    style: 0,
+                    lpfnWndProc: Some(DefWindowProcW),
+                    cbClsExtra: 0,
+                    cbWndExtra: 0,
+                    hInstance: 0 as HINSTANCE,
+                    hIcon: 0,
+                    hCursor: 0,
+                    hbrBackground: 0,
+                    lpszMenuName: std::ptr::null(),
+                    lpszClassName: CLASS_NAME.as_ptr(),
+                    hIconSm: 0,
+                };
+                RegisterClassExW(&wc);
+            }
+        });
+
+        // SAFETY: CreateWindowExW is called with valid class name and
+        // dimensions. The window is created hidden (no WS_VISIBLE) as a
+        // frameless popup (WS_POPUP). Returns 0 on failure.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,                          // dwExStyle
+                CLASS_NAME.as_ptr(),        // lpClassName
+                CLASS_NAME.as_ptr(),        // lpWindowName (reuse class name)
+                WS_POPUP,                   // dwStyle: frameless, not visible
+                0,                          // x
+                0,                          // y
+                width as i32,               // nWidth
+                height as i32,              // nHeight
+                0,                          // hWndParent
+                0,                          // hMenu
+                0 as HINSTANCE,             // hInstance
+                std::ptr::null(),           // lpParam
+            )
+        };
+
+        if hwnd == 0 {
+            return Err(EngramError::Config(
+                "CreateWindowExW failed to create hidden window".into(),
+            ));
+        }
+
+        tracing::debug!(hwnd, width, height, "Created hidden Win32 window for webview");
+        Ok(Self { hwnd })
+    }
+}
+
+#[cfg(all(feature = "webview", target_os = "windows"))]
+impl wry::raw_window_handle::HasWindowHandle for PlaceholderWindowHandle {
+    fn window_handle(
+        &self,
+    ) -> Result<wry::raw_window_handle::WindowHandle<'_>, wry::raw_window_handle::HandleError> {
+        let raw = wry::raw_window_handle::RawWindowHandle::Win32(
+            wry::raw_window_handle::Win32WindowHandle::new(
+                // SAFETY: hwnd was returned by CreateWindowExW and is non-zero
+                // (checked in create_hidden_window). It remains valid for the
+                // lifetime of this struct.
+                std::num::NonZeroIsize::new(self.hwnd).expect("HWND must be non-zero"),
+            ),
+        );
+        // SAFETY: The raw handle is a valid Win32 HWND obtained from
+        // CreateWindowExW and lives as long as this struct.
+        Ok(unsafe { wry::raw_window_handle::WindowHandle::borrow_raw(raw) })
+    }
+}
+
+#[cfg(all(feature = "webview", not(target_os = "windows")))]
+impl PlaceholderWindowHandle {
+    fn create_hidden_window(_width: u32, _height: u32) -> Result<Self, EngramError> {
+        Err(EngramError::Config(
+            "Webview window creation is only supported on Windows".into(),
+        ))
+    }
+}
+
+#[cfg(all(feature = "webview", not(target_os = "windows")))]
+impl wry::raw_window_handle::HasWindowHandle for PlaceholderWindowHandle {
+    fn window_handle(
+        &self,
+    ) -> Result<wry::raw_window_handle::WindowHandle<'_>, wry::raw_window_handle::HandleError> {
+        Err(wry::raw_window_handle::HandleError::NotSupported)
     }
 }
 
@@ -68,12 +272,16 @@ impl TrayPanelWebview {
 
         // Build a webview with the tray panel HTML.
         // In a real app, this would be integrated with the platform's
-        // event loop (winit, tao, or raw Win32 message pump).
+        // event loop (winit, tao, or raw Win32 message pump) and use
+        // a real parent HWND. This placeholder allows compilation and
+        // testing of the webview pipeline without a live window.
+        let handle = PlaceholderWindowHandle::create_hidden_window(
+            self.config.width,
+            self.config.height,
+        )?;
         let _webview = WebViewBuilder::new()
             .with_html(html)
-            .build_as_child(&wry::raw_window_handle::RawWindowHandle::Win32(
-                wry::raw_window_handle::Win32WindowHandle::new(std::num::NonZeroIsize::new(0).unwrap()),
-            ))
+            .build_as_child(&handle)
             .map_err(|e| {
                 EngramError::Config(format!("Failed to create webview: {}", e))
             })?;
@@ -148,5 +356,116 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("webview"));
+    }
+
+    // -----------------------------------------------------------------------
+    // TaskbarEdge & panel_position tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_taskbar_edge_equality() {
+        assert_eq!(TaskbarEdge::Bottom, TaskbarEdge::Bottom);
+        assert_ne!(TaskbarEdge::Bottom, TaskbarEdge::Top);
+        assert_ne!(TaskbarEdge::Left, TaskbarEdge::Right);
+    }
+
+    #[test]
+    fn test_panel_position_bottom() {
+        let config = WebviewConfig::default(); // 400x500
+        let (x, y) = config.panel_position(1000, 1040, TaskbarEdge::Bottom);
+        assert_eq!(x, 1000 - 200); // tray_x - width/2
+        assert_eq!(y, 1040 - 500); // tray_y - height
+    }
+
+    #[test]
+    fn test_panel_position_top() {
+        let config = WebviewConfig::default();
+        let (x, y) = config.panel_position(500, 0, TaskbarEdge::Top);
+        assert_eq!(x, 500 - 200);
+        assert_eq!(y, 0 + 32);
+    }
+
+    #[test]
+    fn test_panel_position_left() {
+        let config = WebviewConfig::default();
+        let (x, y) = config.panel_position(0, 500, TaskbarEdge::Left);
+        assert_eq!(x, 0 + 32);
+        assert_eq!(y, 500 - 250);
+    }
+
+    #[test]
+    fn test_panel_position_right() {
+        let config = WebviewConfig::default();
+        let (x, y) = config.panel_position(1920, 500, TaskbarEdge::Right);
+        assert_eq!(x, 1920 - 400);
+        assert_eq!(y, 500 - 250);
+    }
+
+    #[test]
+    fn test_panel_position_custom_size() {
+        let config = WebviewConfig {
+            width: 300,
+            height: 600,
+            title: "Test".to_string(),
+        };
+        let (x, y) = config.panel_position(800, 900, TaskbarEdge::Bottom);
+        assert_eq!(x, 800 - 150);
+        assert_eq!(y, 900 - 600);
+    }
+
+    // -----------------------------------------------------------------------
+    // TrayPanelState tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_tray_panel_state_new() {
+        let state = TrayPanelState::new();
+        assert!(!state.is_visible());
+    }
+
+    #[test]
+    fn test_tray_panel_state_default() {
+        let state = TrayPanelState::default();
+        assert!(!state.is_visible());
+    }
+
+    #[test]
+    fn test_tray_panel_state_show_hide() {
+        let mut state = TrayPanelState::new();
+        assert!(!state.is_visible());
+
+        state.show();
+        assert!(state.is_visible());
+
+        state.hide();
+        assert!(!state.is_visible());
+    }
+
+    #[test]
+    fn test_tray_panel_state_toggle() {
+        let mut state = TrayPanelState::new();
+        assert!(!state.is_visible());
+
+        state.toggle();
+        assert!(state.is_visible());
+
+        state.toggle();
+        assert!(!state.is_visible());
+    }
+
+    #[test]
+    fn test_tray_panel_state_double_show() {
+        let mut state = TrayPanelState::new();
+        state.show();
+        state.show();
+        assert!(state.is_visible());
+    }
+
+    #[test]
+    fn test_tray_panel_state_double_hide() {
+        let mut state = TrayPanelState::new();
+        state.hide();
+        state.hide();
+        assert!(!state.is_visible());
     }
 }

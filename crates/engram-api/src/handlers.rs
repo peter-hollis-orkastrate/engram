@@ -3,9 +3,10 @@
 //! Each handler extracts query/path parameters via axum extractors,
 //! interacts with AppState services, and returns JSON responses.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -49,6 +50,26 @@ pub struct RecentParams {
 pub struct DictationHistoryParams {
     pub limit: Option<u64>,
     pub app: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HybridSearchParams {
+    pub q: Option<String>,
+    pub limit: Option<u64>,
+    pub offset: Option<u64>,
+    pub content_type: Option<String>,
+    pub app: Option<String>,
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub fts_weight: Option<f32>,
+    pub vector_weight: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawSearchParams {
+    pub q: Option<String>,
+    pub limit: Option<u64>,
+    pub content_type: Option<String>,
 }
 
 // =============================================================================
@@ -160,6 +181,24 @@ pub struct PurgeResultResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct SearchResponse {
+    pub results: Vec<SearchResultItem>,
+    pub total: u64,
+    pub query: String,
+    pub search_type: String,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchResultItem {
+    pub chunk_id: String,
+    pub score: f64,
+    pub content: String,
+    pub timestamp: Option<String>,
+    pub source: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
@@ -187,7 +226,7 @@ pub async fn search(
         ));
     }
 
-    let limit = params.limit.unwrap_or(20).min(100).max(1);
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let offset = params.offset.unwrap_or(0);
 
     // Validate content_type if provided.
@@ -302,7 +341,7 @@ pub async fn recent(
     State(state): State<AppState>,
     Query(params): Query<RecentParams>,
 ) -> Result<Json<PaginatedResults>, ApiError> {
-    let limit = params.limit.unwrap_or(20).min(100).max(1);
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let ct = params.content_type.as_deref();
 
     let rows = state.query_service.recent(limit, ct).map_err(ApiError::from)?;
@@ -436,7 +475,7 @@ pub async fn dictation_history(
     State(state): State<AppState>,
     Query(params): Query<DictationHistoryParams>,
 ) -> Result<Json<DictationHistoryResponse>, ApiError> {
-    let limit = params.limit.unwrap_or(20).min(100).max(1);
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let repo = DictationRepository::new(Arc::clone(&state.database));
 
     let entries = if let Some(app) = &params.app {
@@ -625,6 +664,150 @@ pub async fn update_config(
     Ok(Json(updated))
 }
 
+// =============================================================================
+// Audio device endpoint
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioDeviceInfo {
+    pub name: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub buffer_size: u32,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AudioDeviceResponse {
+    pub active_device: Option<AudioDeviceInfo>,
+    pub available_devices: Vec<AudioDeviceInfo>,
+}
+
+/// GET /audio/device - audio device information.
+pub async fn audio_device(
+    State(state): State<AppState>,
+) -> Result<Json<AudioDeviceResponse>, ApiError> {
+    let is_active = state.audio_active.load(std::sync::atomic::Ordering::Relaxed);
+
+    let default_device = AudioDeviceInfo {
+        name: "Default Audio Device".to_string(),
+        sample_rate: 16000,
+        channels: 1,
+        buffer_size: 4096,
+        is_active,
+    };
+
+    let active_device = if is_active {
+        Some(default_device.clone())
+    } else {
+        None
+    };
+
+    Ok(Json(AudioDeviceResponse {
+        active_device,
+        available_devices: vec![AudioDeviceInfo {
+            name: "Default Audio Device".to_string(),
+            sample_rate: 16000,
+            channels: 1,
+            buffer_size: 4096,
+            is_active,
+        }],
+    }))
+}
+
+// =============================================================================
+// Purge dry-run endpoint
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct PurgeDryRunParams {
+    pub before: Option<String>,
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub confirm: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PurgeDryRunResponse {
+    pub chunks_affected: u64,
+    pub embeddings_affected: u64,
+    pub frames_affected: u64,
+    pub bytes_freed: u64,
+    pub dry_run: bool,
+}
+
+/// POST /storage/purge/dry-run - preview purge results without deleting.
+pub async fn purge_dry_run(
+    State(state): State<AppState>,
+    Json(params): Json<PurgeDryRunParams>,
+) -> Result<Json<PurgeDryRunResponse>, ApiError> {
+    // At least one filter required
+    if params.before.is_none() && params.content_type.is_none() {
+        return Err(ApiError::BadRequest(
+            "At least one of 'before' or 'content_type' must be provided".to_string(),
+        ));
+    }
+
+    // Parse before timestamp if provided
+    let before_ts = if let Some(ref before) = params.before {
+        let dt: DateTime<Utc> = before.parse().map_err(|_| {
+            ApiError::BadRequest(format!("Invalid ISO 8601 date: {}", before))
+        })?;
+        Some(dt.timestamp())
+    } else {
+        None
+    };
+
+    // Validate content_type if provided
+    if let Some(ref ct) = params.content_type {
+        if !["screen", "audio", "dictation", "Screenshot", "AudioTranscription", "Dictation", "Manual"].contains(&ct.as_str()) {
+            return Err(ApiError::BadRequest(format!(
+                "Invalid content_type '{}'. Must be one of: screen, audio, dictation",
+                ct
+            )));
+        }
+    }
+
+    // Count matching records using read-only queries
+    let count = state.database.with_conn(|conn| {
+        let mut sql = "SELECT COUNT(*), COALESCE(SUM(LENGTH(text)), 0) FROM captures WHERE 1=1".to_string();
+        let mut sql_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(ts) = before_ts {
+            sql.push_str(" AND timestamp < ?");
+            sql_params.push(Box::new(ts));
+        }
+        if let Some(ref ct) = params.content_type {
+            let normalized = match ct.as_str() {
+                "Screenshot" | "screen" => "screen",
+                "AudioTranscription" | "audio" => "audio",
+                "Dictation" | "dictation" => "dictation",
+                other => other,
+            };
+            sql.push_str(" AND content_type = ?");
+            sql_params.push(Box::new(normalized.to_string()));
+        }
+
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> = sql_params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql)
+            .map_err(|e| engram_core::error::EngramError::Storage(format!("Dry-run query failed: {}", e)))?;
+
+        let (count, bytes): (u64, u64) = stmt.query_row(params_refs.as_slice(), |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        }).map_err(|e| engram_core::error::EngramError::Storage(format!("Dry-run query failed: {}", e)))?;
+
+        Ok((count, bytes))
+    })?;
+
+    Ok(Json(PurgeDryRunResponse {
+        chunks_affected: count.0,
+        embeddings_affected: count.0,
+        frames_affected: count.0,
+        bytes_freed: count.1,
+        dry_run: true,
+    }))
+}
+
 /// GET /health - health check.
 pub async fn health(
     State(state): State<AppState>,
@@ -647,8 +830,256 @@ pub async fn health(
 }
 
 /// GET /ui - serve the full self-contained dashboard HTML.
-pub async fn ui() -> impl IntoResponse {
-    Html(engram_ui::dashboard::DASHBOARD_HTML)
+pub async fn ui(State(state): State<AppState>) -> impl IntoResponse {
+    // Inject the API token into the dashboard HTML so JavaScript can authenticate.
+    let html = engram_ui::dashboard::DASHBOARD_HTML.replacen(
+        "var API_BASE = '';",
+        &format!("var API_BASE = '';\n  var API_TOKEN = '{}';", state.api_token),
+        1,
+    );
+    Html(html)
+}
+
+// =============================================================================
+// Specialized search endpoints
+// =============================================================================
+
+/// GET /search/semantic - semantic vector search using HNSW k-NN.
+pub async fn search_semantic(
+    State(state): State<AppState>,
+    Query(params): Query<SearchParams>,
+) -> Result<Json<SearchResponse>, ApiError> {
+    let start_time = Instant::now();
+
+    let q = params
+        .q
+        .ok_or_else(|| ApiError::BadRequest("Parameter 'q' is required".to_string()))?;
+
+    if q.is_empty() || q.len() > 1000 {
+        return Err(ApiError::BadRequest(
+            "Parameter 'q' must be between 1 and 1000 characters".to_string(),
+        ));
+    }
+
+    let limit = params.limit.unwrap_or(20).clamp(1, 100) as usize;
+
+    let filters = SearchFilters {
+        content_type: params.content_type.as_deref().and_then(|ct| match ct {
+            "screen" => Some(ContentType::Screen),
+            "audio" => Some(ContentType::Audio),
+            "dictation" => Some(ContentType::Dictation),
+            _ => None,
+        }),
+        app_name: params.app.clone(),
+        start: params.start.as_deref().and_then(|s| s.parse().ok()),
+        end: params.end.as_deref().and_then(|s| s.parse().ok()),
+    };
+
+    let vector_results = state
+        .search_engine
+        .hybrid_search(&q, filters, limit)
+        .await
+        .unwrap_or_default();
+
+    let capture_repo = CaptureRepository::new(Arc::clone(&state.database));
+
+    let results: Vec<SearchResultItem> = vector_results
+        .iter()
+        .map(|vr| {
+            let content = if let Ok(Some(frame)) = capture_repo.find_by_id(vr.id) {
+                frame.text
+            } else {
+                String::new()
+            };
+
+            SearchResultItem {
+                chunk_id: vr.id.to_string(),
+                score: vr.score,
+                content,
+                timestamp: vr.timestamp.clone(),
+                source: vr.content_type.clone().unwrap_or_default(),
+            }
+        })
+        .collect();
+
+    let total = results.len() as u64;
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+
+    Ok(Json(SearchResponse {
+        results,
+        total,
+        query: q,
+        search_type: "semantic".to_string(),
+        duration_ms,
+    }))
+}
+
+/// GET /search/hybrid - combined FTS + vector search with configurable weights.
+pub async fn search_hybrid(
+    State(state): State<AppState>,
+    Query(params): Query<HybridSearchParams>,
+) -> Result<Json<SearchResponse>, ApiError> {
+    let start_time = Instant::now();
+
+    let q = params
+        .q
+        .ok_or_else(|| ApiError::BadRequest("Parameter 'q' is required".to_string()))?;
+
+    if q.is_empty() || q.len() > 1000 {
+        return Err(ApiError::BadRequest(
+            "Parameter 'q' must be between 1 and 1000 characters".to_string(),
+        ));
+    }
+
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
+    let fts_weight = params.fts_weight.unwrap_or(0.3) as f64;
+    let vector_weight = params.vector_weight.unwrap_or(0.7) as f64;
+
+    // Run FTS search.
+    let fts_results = if let Some(ref ct) = params.content_type {
+        state.fts_search.search_by_type(&q, ct, limit)?
+    } else {
+        state.fts_search.search(&q, limit)?
+    };
+
+    // Run vector search.
+    let filters = SearchFilters {
+        content_type: params.content_type.as_deref().and_then(|ct| match ct {
+            "screen" => Some(ContentType::Screen),
+            "audio" => Some(ContentType::Audio),
+            "dictation" => Some(ContentType::Dictation),
+            _ => None,
+        }),
+        app_name: params.app.clone(),
+        start: params.start.as_deref().and_then(|s| s.parse().ok()),
+        end: params.end.as_deref().and_then(|s| s.parse().ok()),
+    };
+
+    let vector_results = state
+        .search_engine
+        .hybrid_search(&q, filters, limit as usize)
+        .await
+        .unwrap_or_default();
+
+    // Normalize FTS BM25 scores to 0-1 range.
+    let max_fts_score = fts_results
+        .iter()
+        .map(|r| r.rank)
+        .fold(0.0_f64, f64::max);
+
+    // Merge results by ID, combining scores.
+    let mut merged: HashMap<String, (f64, String, Option<String>, String)> = HashMap::new();
+
+    for fr in &fts_results {
+        let normalized_score = if max_fts_score > 0.0 {
+            fr.rank / max_fts_score
+        } else {
+            0.0
+        };
+        let id_str = fr.id.to_string();
+        let entry = merged.entry(id_str).or_insert((
+            0.0,
+            fr.text.clone(),
+            Some(fr.timestamp.to_rfc3339()),
+            fr.content_type.clone(),
+        ));
+        entry.0 += normalized_score * fts_weight;
+    }
+
+    let capture_repo = CaptureRepository::new(Arc::clone(&state.database));
+
+    for vr in &vector_results {
+        let id_str = vr.id.to_string();
+        let entry = merged.entry(id_str).or_insert_with(|| {
+            let content = if let Ok(Some(frame)) = capture_repo.find_by_id(vr.id) {
+                frame.text
+            } else {
+                String::new()
+            };
+            (
+                0.0,
+                content,
+                vr.timestamp.clone(),
+                vr.content_type.clone().unwrap_or_default(),
+            )
+        });
+        entry.0 += vr.score * vector_weight;
+    }
+
+    // Sort by combined score descending.
+    let mut sorted: Vec<_> = merged.into_iter().collect();
+    sorted.sort_by(|a, b| b.1 .0.partial_cmp(&a.1 .0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let results: Vec<SearchResultItem> = sorted
+        .into_iter()
+        .take(limit as usize)
+        .map(|(id, (score, content, timestamp, source))| SearchResultItem {
+            chunk_id: id,
+            score,
+            content,
+            timestamp,
+            source,
+        })
+        .collect();
+
+    let total = results.len() as u64;
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+
+    Ok(Json(SearchResponse {
+        results,
+        total,
+        query: q,
+        search_type: "hybrid".to_string(),
+        duration_ms,
+    }))
+}
+
+/// GET /search/raw - raw FTS5 keyword search.
+pub async fn search_raw(
+    State(state): State<AppState>,
+    Query(params): Query<RawSearchParams>,
+) -> Result<Json<SearchResponse>, ApiError> {
+    let start_time = Instant::now();
+
+    let q = params
+        .q
+        .ok_or_else(|| ApiError::BadRequest("Parameter 'q' is required".to_string()))?;
+
+    if q.is_empty() || q.len() > 1000 {
+        return Err(ApiError::BadRequest(
+            "Parameter 'q' must be between 1 and 1000 characters".to_string(),
+        ));
+    }
+
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
+
+    let fts_results = if let Some(ref ct) = params.content_type {
+        state.fts_search.search_by_type(&q, ct, limit)?
+    } else {
+        state.fts_search.search(&q, limit)?
+    };
+
+    let results: Vec<SearchResultItem> = fts_results
+        .into_iter()
+        .map(|fr| SearchResultItem {
+            chunk_id: fr.id.to_string(),
+            score: fr.rank,
+            content: fr.text,
+            timestamp: Some(fr.timestamp.to_rfc3339()),
+            source: fr.content_type,
+        })
+        .collect();
+
+    let total = results.len() as u64;
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+
+    Ok(Json(SearchResponse {
+        results,
+        total,
+        query: q,
+        search_type: "raw".to_string(),
+        duration_ms,
+    }))
 }
 
 // =============================================================================
@@ -1287,11 +1718,369 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
+    // --- M1 Phase 3: Search endpoint tests ---
+
+    #[tokio::test]
+    async fn test_search_semantic_requires_q() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search/semantic")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_search_semantic_empty_db() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search/semantic?q=hello")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let result: SearchResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result.search_type, "semantic");
+        assert_eq!(result.total, 0);
+        assert_eq!(result.query, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_search_hybrid_requires_q() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search/hybrid")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_search_hybrid_empty_db() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search/hybrid?q=hello")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let result: SearchResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result.search_type, "hybrid");
+        assert_eq!(result.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_search_raw_requires_q() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search/raw")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_search_raw_empty_db() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/search/raw?q=hello")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let result: SearchResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result.search_type, "raw");
+        assert_eq!(result.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_search_raw_finds_fts_results() {
+        let state = make_state();
+
+        state.database.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, app_name, window_title)
+                 VALUES (?1, 'screen', strftime('%s','now'), 'finding raw search data', 'Chrome', 'Tab')",
+                rusqlite::params![Uuid::new_v4().to_string()],
+            ).map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/search/raw?q=finding")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let result: SearchResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result.search_type, "raw");
+        assert_eq!(result.total, 1);
+        assert_eq!(result.results[0].content, "finding raw search data");
+    }
+
+    #[tokio::test]
+    async fn test_search_semantic_rejects_long_query() {
+        let app = make_app();
+        let long_q = "a".repeat(1001);
+        let resp = app
+            .oneshot(
+                Request::get(&format!("/search/semantic?q={}", long_q))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_search_endpoints_require_auth() {
+        let _app = make_app();
+        for path in ["/search/semantic?q=test", "/search/hybrid?q=test", "/search/raw?q=test"] {
+            let resp = crate::create_router(make_state())
+                .oneshot(
+                    Request::get(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "Expected 401 for {}", path);
+        }
+    }
+
     #[tokio::test]
     async fn test_payload_too_large_maps_to_413() {
         let err: crate::error::ApiError =
             engram_core::error::EngramError::PayloadTooLarge { size: 2_000_000, limit: 1_048_576 }.into();
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    // --- M2: Audio Device & Purge Dry-Run Tests ---
+
+    #[tokio::test]
+    async fn test_audio_device_endpoint() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/audio/device")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let device_resp: AudioDeviceResponse = serde_json::from_slice(&body).unwrap();
+        // Audio is not active by default, so active_device should be None.
+        assert!(device_resp.active_device.is_none());
+        assert_eq!(device_resp.available_devices.len(), 1);
+        assert_eq!(device_resp.available_devices[0].name, "Default Audio Device");
+        assert_eq!(device_resp.available_devices[0].sample_rate, 16000);
+        assert_eq!(device_resp.available_devices[0].channels, 1);
+    }
+
+    #[tokio::test]
+    async fn test_audio_device_when_active() {
+        let state = make_state();
+        state.audio_active.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/audio/device")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let device_resp: AudioDeviceResponse = serde_json::from_slice(&body).unwrap();
+        assert!(device_resp.active_device.is_some());
+        assert!(device_resp.active_device.unwrap().is_active);
+    }
+
+    #[tokio::test]
+    async fn test_purge_dry_run_with_content_type() {
+        let state = make_state();
+
+        // Insert test data.
+        state.database.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, app_name)
+                 VALUES (?1, 'screen', strftime('%s','now'), 'test screen data', 'Chrome')",
+                rusqlite::params![Uuid::new_v4().to_string()],
+            ).map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, app_name)
+                 VALUES (?1, 'audio', strftime('%s','now'), 'test audio data', 'Mic')",
+                rusqlite::params![Uuid::new_v4().to_string()],
+            ).map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge/dry-run")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content_type":"screen"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let result: PurgeDryRunResponse = serde_json::from_slice(&body).unwrap();
+        assert!(result.dry_run);
+        assert_eq!(result.chunks_affected, 1);
+    }
+
+    #[tokio::test]
+    async fn test_purge_dry_run_missing_params() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge/dry-run")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_purge_dry_run_invalid_content_type() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge/dry-run")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content_type":"invalid"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_purge_dry_run_with_before() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge/dry-run")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"before":"2099-01-01T00:00:00Z"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let result: PurgeDryRunResponse = serde_json::from_slice(&body).unwrap();
+        assert!(result.dry_run);
+    }
+
+    #[tokio::test]
+    async fn test_purge_dry_run_invalid_date() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge/dry-run")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"before":"not-a-date"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_audio_device_requires_auth() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/audio/device")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_purge_dry_run_requires_auth() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/storage/purge/dry-run")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content_type":"screen"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

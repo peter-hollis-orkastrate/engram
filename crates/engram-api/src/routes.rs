@@ -25,12 +25,15 @@ use crate::state::AppState;
 /// A fully configured axum Router ready to serve requests.
 pub fn create_router(state: AppState) -> Router {
     // CORS middleware: allow localhost origins for dashboard access.
+    // Use the configured port (from CLI/env/config) plus port+1 for dev server.
+    let port = state.config.lock().map(|c| c.general.port).unwrap_or(3030);
+    let dev_port = port.saturating_add(1);
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list([
-            "http://127.0.0.1:3030".parse::<HeaderValue>().unwrap(),
-            "http://localhost:3030".parse::<HeaderValue>().unwrap(),
-            "http://127.0.0.1:3031".parse::<HeaderValue>().unwrap(),
-            "http://localhost:3031".parse::<HeaderValue>().unwrap(),
+            format!("http://127.0.0.1:{}", port).parse::<HeaderValue>().unwrap(),
+            format!("http://localhost:{}", port).parse::<HeaderValue>().unwrap(),
+            format!("http://127.0.0.1:{}", dev_port).parse::<HeaderValue>().unwrap(),
+            format!("http://localhost:{}", dev_port).parse::<HeaderValue>().unwrap(),
         ]))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT]);
@@ -62,6 +65,11 @@ pub fn create_router(state: AppState) -> Router {
                 .put(handlers::update_config)
                 .layer(DefaultBodyLimit::max(64 * 1024)), // 64KB for config
         )
+        .route("/audio/device", get(handlers::audio_device))
+        .route("/storage/purge/dry-run", post(handlers::purge_dry_run))
+        .route("/search/semantic", get(handlers::search_semantic))
+        .route("/search/hybrid", get(handlers::search_hybrid))
+        .route("/search/raw", get(handlers::search_raw))
         .route("/ingest", post(handlers::ingest))
         .layer(axum::middleware::from_fn(crate::rate_limit::rate_limit_middleware))
         .layer(axum::Extension(limiter));
@@ -94,7 +102,7 @@ pub async fn start_server(
     _config: &engram_core::config::EngramConfig,
     state: AppState,
 ) -> Result<(), engram_core::error::EngramError> {
-    let port = 3030u16; // Default port; config.general doesn't expose port directly yet.
+    let port = _config.general.port;
     let addr = format!("127.0.0.1:{}", port);
 
     let router = create_router(state);

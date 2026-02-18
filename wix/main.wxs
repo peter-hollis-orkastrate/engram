@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Product Id="*"
+             Name="Engram"
+             Language="1033"
+             Version="0.1.0"
+             Manufacturer="Engram Project"
+             UpgradeCode="B5E3F9A1-7C4D-4E6B-8F2A-1D3C5E7F9B0D">
+
+        <Package InstallerVersion="500"
+                 Compressed="yes"
+                 InstallScope="perMachine"
+                 Description="Engram - AI-Powered Memory Assistant"
+                 Comments="Captures screen, audio, and dictation for searchable recall" />
+
+        <MajorUpgrade DowngradeErrorMessage="A newer version of Engram is already installed." />
+        <MediaTemplate EmbedCab="yes" />
+
+        <Feature Id="ProductFeature" Title="Engram" Level="1">
+            <ComponentGroupRef Id="ProductComponents" />
+            <ComponentGroupRef Id="StartMenuShortcuts" />
+        </Feature>
+
+        <Feature Id="UserDataFeature" Title="User Data" Level="1"
+                 Description="Creates user data directory with default configuration">
+            <ComponentRef Id="UserDataDir" />
+            <ComponentRef Id="UserDataSubDir" />
+            <ComponentRef Id="UserDefaultConfig" />
+        </Feature>
+
+        <SetDirectory Id="UserProfileFolder" Value="[%USERPROFILE]" />
+
+        <Directory Id="TARGETDIR" Name="SourceDir">
+            <Directory Id="ProgramFiles64Folder">
+                <Directory Id="INSTALLDIR" Name="Engram">
+                    <Directory Id="DataDir" Name="data" />
+                    <Directory Id="ModelsDir" Name="models" />
+                </Directory>
+            </Directory>
+            <Directory Id="ProgramMenuFolder">
+                <Directory Id="ApplicationProgramsFolder" Name="Engram" />
+            </Directory>
+            <Directory Id="UserProfileFolder">
+                <Directory Id="EngramUserDir" Name=".engram">
+                    <Directory Id="EngramUserDataDir" Name="data" />
+                </Directory>
+            </Directory>
+        </Directory>
+
+        <ComponentGroup Id="ProductComponents" Directory="INSTALLDIR">
+            <Component Id="MainExecutable" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+                <File Id="EngramExe" Source="target\release\engram.exe" KeyPath="yes" />
+            </Component>
+            <Component Id="DefaultConfig" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901"
+                       NeverOverwrite="yes">
+                <File Id="ConfigToml" Source="wix\config.toml" KeyPath="yes" />
+                <Condition>NOT Installed</Condition>
+            </Component>
+        </ComponentGroup>
+
+        <!-- User data directory: Permanent="yes" preserves files on uninstall (M3-18) -->
+        <Component Id="UserDataDir" Directory="EngramUserDir"
+                   Guid="E5F6A7B8-C9D0-1234-EFAB-345678901234"
+                   Permanent="yes" NeverOverwrite="yes">
+            <CreateFolder />
+            <RegistryValue Root="HKCU" Key="Software\Engram" Name="UserDataPath"
+                           Type="string" Value="[EngramUserDir]" KeyPath="yes" />
+            <Condition>NOT Installed</Condition>
+        </Component>
+
+        <Component Id="UserDataSubDir" Directory="EngramUserDataDir"
+                   Guid="F6A7B8C9-D0E1-2345-FABC-456789012345"
+                   Permanent="yes" NeverOverwrite="yes">
+            <CreateFolder />
+            <RegistryValue Root="HKCU" Key="Software\Engram" Name="UserDataSubDir"
+                           Type="string" Value="[EngramUserDataDir]" KeyPath="yes" />
+            <Condition>NOT Installed</Condition>
+        </Component>
+
+        <Component Id="UserDefaultConfig" Directory="EngramUserDir"
+                   Guid="A7B8C9D0-E1F2-3456-ABCD-567890123456"
+                   Permanent="yes" NeverOverwrite="yes">
+            <File Id="UserConfigToml" Source="wix\config.toml" Name="config.toml" KeyPath="yes" />
+            <Condition>NOT Installed</Condition>
+        </Component>
+
+        <ComponentGroup Id="StartMenuShortcuts" Directory="ApplicationProgramsFolder">
+            <Component Id="ApplicationShortcut" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
+                <Shortcut Id="AppShortcut"
+                          Name="Engram"
+                          Description="AI-Powered Memory Assistant"
+                          Target="[INSTALLDIR]engram.exe"
+                          WorkingDirectory="INSTALLDIR" />
+                <RemoveFolder Id="CleanUpShortCut" On="uninstall" />
+                <RegistryValue Root="HKCU" Key="Software\Engram" Name="installed"
+                               Type="integer" Value="1" KeyPath="yes" />
+            </Component>
+        </ComponentGroup>
+
+        <!-- Optional startup registry key -->
+        <Component Id="StartupRegistration" Directory="INSTALLDIR"
+                   Guid="D4E5F6A7-B8C9-0123-DEFA-234567890123">
+            <RegistryValue Root="HKCU"
+                           Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                           Name="Engram"
+                           Type="string"
+                           Value="[INSTALLDIR]engram.exe --headless"
+                           KeyPath="yes" />
+        </Component>
+    </Product>
+</Wix>

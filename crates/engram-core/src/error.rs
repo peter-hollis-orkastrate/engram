@@ -115,9 +115,14 @@ mod tests {
             EngramError::Serialization("test".into()),
             EngramError::PiiDetection("test".into()),
             EngramError::LuhnValidation,
-            EngramError::ProtectedField { field: "test".into() },
+            EngramError::ProtectedField {
+                field: "test".into(),
+            },
             EngramError::RateLimited,
-            EngramError::PayloadTooLarge { size: 100, limit: 50 },
+            EngramError::PayloadTooLarge {
+                size: 100,
+                limit: 50,
+            },
             EngramError::ShuttingDown,
         ];
         assert_eq!(errors.len(), 16);
@@ -179,8 +184,7 @@ mod tests {
 
     #[test]
     fn test_error_from_io() {
-        let io_err =
-            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
         let engram_err: EngramError = io_err.into();
         assert!(matches!(engram_err, EngramError::Io(_)));
         assert!(engram_err.to_string().contains("access denied"));
@@ -249,10 +253,8 @@ mod tests {
 
     #[test]
     fn test_io_error_display_includes_message() {
-        let io_err = std::io::Error::new(
-            std::io::ErrorKind::ConnectionRefused,
-            "connection refused",
-        );
+        let io_err =
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused");
         let engram_err: EngramError = io_err.into();
         let display = engram_err.to_string();
         assert!(display.starts_with("I/O error:"));

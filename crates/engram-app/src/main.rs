@@ -110,7 +110,10 @@ async fn audio_capture_loop(
         return;
     }
 
-    tracing::info!(chunk_duration_secs = chunk_secs, "Audio capture loop started");
+    tracing::info!(
+        chunk_duration_secs = chunk_secs,
+        "Audio capture loop started"
+    );
 
     #[cfg(not(target_os = "windows"))]
     {
@@ -121,11 +124,11 @@ async fn audio_capture_loop(
     #[cfg(target_os = "windows")]
     {
         use engram_audio::{
-            AudioCaptureService, AudioConfig as WinAudioConfig, VoiceActivityDetector,
-            WindowsAudioService, SileroVad, SileroVadConfig, VadResult,
+            AudioCaptureService, AudioConfig as WinAudioConfig, SileroVad, SileroVadConfig,
+            VadResult, VoiceActivityDetector, WindowsAudioService,
         };
-        use engram_whisper::{TranscriptionService, WhisperConfig};
         use engram_whisper::whisper_service::WhisperService;
+        use engram_whisper::{TranscriptionService, WhisperConfig};
 
         let audio_service = WindowsAudioService::new(WinAudioConfig::default());
 
@@ -256,8 +259,8 @@ async fn dictation_listener(
 
     #[cfg(target_os = "windows")]
     {
-        use engram_dictation::{HotkeyConfig, HotkeyService, TextInjector};
         use engram_core::types::{ContentType, DictationEntry, DictationMode};
+        use engram_dictation::{HotkeyConfig, HotkeyService, TextInjector};
 
         let text_injector = TextInjector::new();
 
@@ -414,10 +417,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // If --config was explicitly provided, the file must exist.
     if cli_args.config.is_some() && !config_file.exists() {
-        eprintln!(
-            "Error: config file not found: {}",
-            config_file.display()
-        );
+        eprintln!("Error: config file not found: {}", config_file.display());
         std::process::exit(1);
     }
 
@@ -540,7 +540,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(result.text)
                     });
                 tracing::info!("Dictation engine initialized with Whisper transcription");
-                Arc::new(engram_dictation::DictationEngine::with_transcription(transcription_fn))
+                Arc::new(engram_dictation::DictationEngine::with_transcription(
+                    transcription_fn,
+                ))
             }
             Err(e) => {
                 tracing::warn!(
@@ -566,6 +568,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_api_token(api_token)
     .with_shared_state(Arc::clone(&audio_active), Arc::clone(&dictation_engine));
 
+    // === System Tray ===
+    let _tray = if !cli_args.headless {
+        match engram_ui::tray::TrayService::new() {
+            Ok(tray) => {
+                tracing::info!("System tray initialized");
+                Some(tray)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to create system tray — continuing without it");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // === Background tasks ===
 
     // Screen capture + OCR loop.
@@ -575,7 +593,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build CaptureConfig from the loaded TOML config.
     let screenshot_dir = if config.screen.save_screenshots {
         // Resolve data_dir (expand ~ to home).
-        let base = if config.general.data_dir.starts_with("~/") || config.general.data_dir.starts_with("~\\") {
+        let base = if config.general.data_dir.starts_with("~/")
+            || config.general.data_dir.starts_with("~\\")
+        {
             #[cfg(target_os = "windows")]
             let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
             #[cfg(not(target_os = "windows"))]
@@ -622,7 +642,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audio_chunk_secs = config.audio.chunk_duration_secs as u64;
     let audio_active_clone = Arc::clone(&audio_active);
     tokio::spawn(async move {
-        audio_capture_loop(pipeline_audio, audio_enabled, audio_chunk_secs, audio_active_clone).await;
+        audio_capture_loop(
+            pipeline_audio,
+            audio_enabled,
+            audio_chunk_secs,
+            audio_active_clone,
+        )
+        .await;
     });
 
     // Dictation hotkey listener.
@@ -633,11 +659,348 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dictation_listener(dictation_hotkey, dictation_engine_clone, pipeline_dictation).await;
     });
 
+    // Periodic summarization + entity extraction loop.
+    if config.insight.enabled {
+        let insight_config = config.insight.clone();
+        let insight_query_service = state.query_service.clone();
+        let insight_state = state.clone();
+        tokio::spawn(async move {
+            let interval_mins = insight_config.summary_interval_minutes.max(1) as u64;
+            let min_chunks = insight_config.min_chunks_for_summary as usize;
+            let max_bullets = insight_config.max_bullet_points as usize;
+
+            let summarizer = engram_insight::SummarizationService::new(max_bullets, min_chunks);
+            let entity_extractor = engram_insight::EntityExtractor::new();
+
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(interval_mins * 60));
+            // Skip the first immediate tick so we don't run at startup.
+            interval.tick().await;
+
+            let mut last_run_epoch: i64 = chrono::Utc::now().timestamp();
+
+            loop {
+                interval.tick().await;
+                tracing::debug!("Insight summarization tick");
+
+                let chunks = match insight_query_service.get_chunks_since(last_run_epoch) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Insight: failed to query recent chunks");
+                        continue;
+                    }
+                };
+
+                last_run_epoch = chrono::Utc::now().timestamp();
+
+                if chunks.is_empty() {
+                    tracing::debug!("Insight: no new chunks since last run");
+                    continue;
+                }
+
+                // Group chunks by source_app.
+                let mut by_app: std::collections::HashMap<
+                    String,
+                    Vec<&engram_storage::queries::CaptureRow>,
+                > = std::collections::HashMap::new();
+                for chunk in &chunks {
+                    let app = if chunk.app_name.is_empty() {
+                        "unknown".to_string()
+                    } else {
+                        chunk.app_name.clone()
+                    };
+                    by_app.entry(app).or_default().push(chunk);
+                }
+
+                for (app, app_chunks) in &by_app {
+                    if app_chunks.len() < min_chunks {
+                        tracing::debug!(
+                            app = %app,
+                            chunk_count = app_chunks.len(),
+                            "Insight: insufficient chunks for summarization"
+                        );
+                        continue;
+                    }
+
+                    let chunk_texts: Vec<(uuid::Uuid, &str)> =
+                        app_chunks.iter().map(|c| (c.id, c.text.as_str())).collect();
+
+                    // Combined text for entity extraction.
+                    let combined_text: String = app_chunks
+                        .iter()
+                        .map(|c| c.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    // Summarize.
+                    if let Err(e) = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+                        let summary = summarizer.summarize(&chunk_texts, Some(app))?;
+
+                        let bullet_json = serde_json::to_string(&summary.bullet_points)?;
+                        let chunk_ids_json = serde_json::to_string(
+                            &summary
+                                .source_chunk_ids
+                                .iter()
+                                .map(|id| id.to_string())
+                                .collect::<Vec<_>>(),
+                        )?;
+
+                        insight_query_service.store_summary(
+                            &summary.id.to_string(),
+                            &summary.title,
+                            &bullet_json,
+                            &chunk_ids_json,
+                            Some(app.as_str()),
+                            Some(&summary.time_range_start.to_string()),
+                            Some(&summary.time_range_end.to_string()),
+                        )?;
+
+                        insight_state.publish_event(
+                            engram_core::events::DomainEvent::SummaryGenerated {
+                                summary_id: summary.id,
+                                chunk_count: app_chunks.len() as u32,
+                                source_app: Some(app.clone()),
+                                timestamp: engram_core::types::Timestamp::now(),
+                            },
+                        );
+
+                        tracing::info!(
+                            app = %app,
+                            summary_id = %summary.id,
+                            bullet_count = summary.bullet_points.len(),
+                            "Insight: summary generated"
+                        );
+                        Ok(())
+                    })() {
+                        tracing::warn!(error = %e, app = %app, "Insight: summarization failed");
+                    }
+
+                    // Entity extraction.
+                    let first_chunk_id = app_chunks.first().map(|c| c.id).unwrap_or_default();
+                    let entities = entity_extractor.extract(&combined_text, first_chunk_id);
+                    if !entities.is_empty() {
+                        let mut entity_types_set = std::collections::HashSet::new();
+                        for entity in &entities {
+                            entity_types_set.insert(entity.entity_type.as_str().to_string());
+                            if let Err(e) = insight_query_service.store_entity(
+                                &entity.id.to_string(),
+                                entity.entity_type.as_str(),
+                                &entity.value,
+                                Some(&entity.source_chunk_id.to_string()),
+                                None,
+                                entity.confidence as f64,
+                            ) {
+                                tracing::warn!(error = %e, "Insight: failed to store entity");
+                            }
+                        }
+
+                        insight_state.publish_event(
+                            engram_core::events::DomainEvent::EntitiesExtracted {
+                                entity_count: entities.len() as u32,
+                                entity_types: entity_types_set.into_iter().collect(),
+                                timestamp: engram_core::types::Timestamp::now(),
+                            },
+                        );
+
+                        tracing::info!(
+                            app = %app,
+                            entity_count = entities.len(),
+                            "Insight: entities extracted"
+                        );
+                    }
+                }
+            }
+        });
+
+        // Daily digest scheduler.
+        let digest_config = config.insight.clone();
+        let digest_query_service = state.query_service.clone();
+        let digest_state = state.clone();
+        tokio::spawn(async move {
+            let digest_time_str = digest_config.digest_time.clone();
+            let mut last_digest_date = String::new();
+
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+
+                let now = chrono::Utc::now();
+                let today = now.format("%Y-%m-%d").to_string();
+                let current_time = now.format("%H:%M").to_string();
+
+                // Only run once per day at the configured time.
+                if current_time != digest_time_str || last_digest_date == today {
+                    continue;
+                }
+
+                tracing::info!(date = %today, "Insight: generating daily digest");
+                last_digest_date = today.clone();
+
+                // Get today's summaries.
+                let summaries = match digest_query_service.get_summaries(Some(&today), None, None) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Insight: failed to get summaries for digest");
+                        continue;
+                    }
+                };
+
+                // Get today's entities.
+                let entities = match digest_query_service.get_entities(None, Some(&today), None) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Insight: failed to get entities for digest");
+                        continue;
+                    }
+                };
+
+                // Get total chunk count for today.
+                let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap_or_default();
+                let today_epoch = today_start.and_utc().timestamp();
+                let total_chunks = digest_query_service
+                    .get_chunks_since(today_epoch)
+                    .map(|c| c.len() as u32)
+                    .unwrap_or(0);
+
+                // Convert storage rows to insight types for the digest generator.
+                let insight_summaries: Vec<engram_insight::Summary> = summaries
+                    .iter()
+                    .map(|s| engram_insight::Summary {
+                        id: s.id,
+                        title: s.title.clone(),
+                        bullet_points: serde_json::from_str(&s.bullet_points).unwrap_or_default(),
+                        source_chunk_ids: serde_json::from_str(&s.source_chunk_ids)
+                            .unwrap_or_default(),
+                        source_app: s.source_app.clone(),
+                        time_range_start: s
+                            .time_range_start
+                            .as_deref()
+                            .and_then(|t| t.parse().ok())
+                            .unwrap_or(0),
+                        time_range_end: s
+                            .time_range_end
+                            .as_deref()
+                            .and_then(|t| t.parse().ok())
+                            .unwrap_or(0),
+                        created_at: 0,
+                    })
+                    .collect();
+
+                let insight_entities: Vec<engram_insight::Entity> = entities
+                    .iter()
+                    .filter_map(|e| {
+                        let entity_type = engram_insight::EntityType::parse(&e.entity_type)?;
+                        Some(engram_insight::Entity {
+                            id: e.id,
+                            entity_type,
+                            value: e.value.clone(),
+                            source_chunk_id: e
+                                .source_chunk_id
+                                .as_deref()
+                                .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                                .unwrap_or_default(),
+                            source_summary_id: e
+                                .source_summary_id
+                                .as_deref()
+                                .and_then(|s| uuid::Uuid::parse_str(s).ok()),
+                            confidence: e.confidence as f32,
+                            created_at: 0,
+                        })
+                    })
+                    .collect();
+
+                let generator = engram_insight::DigestGenerator::new();
+                let digest =
+                    generator.generate(&today, &insight_summaries, &insight_entities, total_chunks);
+
+                let content_json = serde_json::to_string(&digest.content).unwrap_or_default();
+
+                if let Err(e) = digest_query_service.store_digest(
+                    &digest.id.to_string(),
+                    &digest.digest_date,
+                    &content_json,
+                    digest.summary_count,
+                    digest.entity_count,
+                    digest.chunk_count,
+                ) {
+                    tracing::warn!(error = %e, "Insight: failed to store daily digest");
+                    continue;
+                }
+
+                digest_state.publish_event(
+                    engram_core::events::DomainEvent::DailyDigestGenerated {
+                        date: today.clone(),
+                        summary_count: digest.summary_count,
+                        entity_count: digest.entity_count,
+                        timestamp: engram_core::types::Timestamp::now(),
+                    },
+                );
+
+                tracing::info!(
+                    date = %today,
+                    summaries = digest.summary_count,
+                    entities = digest.entity_count,
+                    chunks = digest.chunk_count,
+                    "Insight: daily digest generated"
+                );
+
+                // Vault export if enabled.
+                if digest_config.export.enabled && !digest_config.export.vault_path.is_empty() {
+                    if let Err(e) = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+                        let exporter =
+                            engram_insight::VaultExporter::new(&digest_config.export.vault_path)?;
+
+                        let mut file_count: u32 = 0;
+
+                        if digest_config.export.export_daily_digest {
+                            exporter.export_digest(&digest)?;
+                            file_count += 1;
+                        }
+
+                        if digest_config.export.export_summaries {
+                            for summary in &insight_summaries {
+                                exporter.export_summary(summary)?;
+                                file_count += 1;
+                            }
+                        }
+
+                        if digest_config.export.export_entities {
+                            exporter.export_entities(&insight_entities)?;
+                            file_count += 1;
+                        }
+
+                        digest_state.publish_event(
+                            engram_core::events::DomainEvent::InsightExported {
+                                path: digest_config.export.vault_path.clone(),
+                                format: digest_config.export.format.clone(),
+                                file_count,
+                                timestamp: engram_core::types::Timestamp::now(),
+                            },
+                        );
+
+                        tracing::info!(
+                            vault_path = %digest_config.export.vault_path,
+                            file_count,
+                            "Insight: vault export completed"
+                        );
+                        Ok(())
+                    })() {
+                        tracing::warn!(error = %e, "Insight: vault export failed");
+                    }
+                }
+            }
+        });
+
+        tracing::info!("Insight pipeline background tasks started");
+    } else {
+        tracing::info!("Insight pipeline disabled in config");
+    }
+
     // === API server ===
 
     let port = config.general.port;
     let addr = format!("127.0.0.1:{}", port);
 
+    let state_for_events = state.clone();
     let router = routes::create_router(state);
 
     let listener = match tokio::net::TcpListener::bind(&addr).await {
@@ -652,12 +1015,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(addr = %addr, "API server listening");
     tracing::info!("Dashboard at http://{}/ui", addr);
 
-    // Emit ApplicationStarted domain event.
+    // Emit ApplicationStarted domain event via SSE broadcast.
     let started_event = engram_core::events::DomainEvent::ApplicationStarted {
         version: env!("CARGO_PKG_VERSION").to_string(),
         config_path: config_file.display().to_string(),
         timestamp: engram_core::types::Timestamp::now(),
     };
+    state_for_events.publish_event(started_event.clone());
     tracing::info!(event = %started_event.event_name(), "Domain event emitted");
 
     // Graceful shutdown: listen for Ctrl+C and coordinate cleanup.
@@ -677,12 +1041,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let uptime_secs = app_start_time.elapsed().as_secs();
     tracing::info!("Graceful shutdown started — flushing state...");
 
-    // Emit ApplicationShutdown domain event.
+    // Emit ApplicationShutdown domain event via SSE broadcast.
     let shutdown_event = engram_core::events::DomainEvent::ApplicationShutdown {
         uptime_secs,
         clean_exit: true,
         timestamp: engram_core::types::Timestamp::now(),
     };
+    state_for_events.publish_event(shutdown_event.clone());
     tracing::info!(
         event = %shutdown_event.event_name(),
         uptime_secs,

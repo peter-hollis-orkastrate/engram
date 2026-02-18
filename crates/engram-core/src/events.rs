@@ -256,6 +256,47 @@ pub enum DomainEvent {
         reason: String,
         timestamp: Timestamp,
     },
+
+    // =========================================================================
+    // Insight Pipeline Events
+    // =========================================================================
+    /// A summary was generated from a batch of chunks.
+    SummaryGenerated {
+        summary_id: Uuid,
+        chunk_count: u32,
+        source_app: Option<String>,
+        timestamp: Timestamp,
+    },
+
+    /// Entities were extracted from text content.
+    EntitiesExtracted {
+        entity_count: u32,
+        entity_types: Vec<String>,
+        timestamp: Timestamp,
+    },
+
+    /// A daily digest was generated.
+    DailyDigestGenerated {
+        date: String,
+        summary_count: u32,
+        entity_count: u32,
+        timestamp: Timestamp,
+    },
+
+    /// Topics were clustered from summaries.
+    TopicClustered {
+        cluster_count: u32,
+        summary_count: u32,
+        timestamp: Timestamp,
+    },
+
+    /// Insights were exported to an external format/vault.
+    InsightExported {
+        path: String,
+        format: String,
+        file_count: u32,
+        timestamp: Timestamp,
+    },
 }
 
 impl DomainEvent {
@@ -291,8 +332,25 @@ impl DomainEvent {
             | DomainEvent::ConfigUpdated { timestamp, .. }
             | DomainEvent::ApplicationStarted { timestamp, .. }
             | DomainEvent::ApplicationShutdown { timestamp, .. }
-            | DomainEvent::ComponentHealthChanged { timestamp, .. } => *timestamp,
+            | DomainEvent::ComponentHealthChanged { timestamp, .. }
+            | DomainEvent::SummaryGenerated { timestamp, .. }
+            | DomainEvent::EntitiesExtracted { timestamp, .. }
+            | DomainEvent::DailyDigestGenerated { timestamp, .. }
+            | DomainEvent::TopicClustered { timestamp, .. }
+            | DomainEvent::InsightExported { timestamp, .. } => *timestamp,
         }
+    }
+
+    /// Converts the event to a JSON value suitable for SSE broadcasting.
+    ///
+    /// The output contains `event` (the event name), `timestamp` (epoch seconds),
+    /// and `data` (the full serialized event).
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "event": self.event_name(),
+            "timestamp": self.timestamp().0,
+            "data": serde_json::to_value(self).unwrap_or_default()
+        })
     }
 
     /// Returns a human-readable event name for logging and SSE.
@@ -328,6 +386,11 @@ impl DomainEvent {
             DomainEvent::ApplicationStarted { .. } => "application_started",
             DomainEvent::ApplicationShutdown { .. } => "application_shutdown",
             DomainEvent::ComponentHealthChanged { .. } => "component_health_changed",
+            DomainEvent::SummaryGenerated { .. } => "summary_generated",
+            DomainEvent::EntitiesExtracted { .. } => "entities_extracted",
+            DomainEvent::DailyDigestGenerated { .. } => "daily_digest_generated",
+            DomainEvent::TopicClustered { .. } => "topic_clustered",
+            DomainEvent::InsightExported { .. } => "insight_exported",
         }
     }
 }
@@ -726,6 +789,34 @@ mod tests {
                 reason: "ok".to_string(),
                 timestamp: ts,
             },
+            DomainEvent::SummaryGenerated {
+                summary_id: id,
+                chunk_count: 5,
+                source_app: Some("Chrome".to_string()),
+                timestamp: ts,
+            },
+            DomainEvent::EntitiesExtracted {
+                entity_count: 3,
+                entity_types: vec!["person".to_string()],
+                timestamp: ts,
+            },
+            DomainEvent::DailyDigestGenerated {
+                date: "2026-02-18".to_string(),
+                summary_count: 10,
+                entity_count: 25,
+                timestamp: ts,
+            },
+            DomainEvent::TopicClustered {
+                cluster_count: 4,
+                summary_count: 10,
+                timestamp: ts,
+            },
+            DomainEvent::InsightExported {
+                path: "/vault/daily".to_string(),
+                format: "obsidian".to_string(),
+                file_count: 3,
+                timestamp: ts,
+            },
         ];
 
         for event in &events {
@@ -936,6 +1027,34 @@ mod tests {
                 reason: "crashed".to_string(),
                 timestamp: ts,
             },
+            DomainEvent::SummaryGenerated {
+                summary_id: id,
+                chunk_count: 5,
+                source_app: None,
+                timestamp: ts,
+            },
+            DomainEvent::EntitiesExtracted {
+                entity_count: 2,
+                entity_types: vec!["url".to_string(), "date".to_string()],
+                timestamp: ts,
+            },
+            DomainEvent::DailyDigestGenerated {
+                date: "2026-02-18".to_string(),
+                summary_count: 8,
+                entity_count: 15,
+                timestamp: ts,
+            },
+            DomainEvent::TopicClustered {
+                cluster_count: 3,
+                summary_count: 7,
+                timestamp: ts,
+            },
+            DomainEvent::InsightExported {
+                path: "/vault".to_string(),
+                format: "obsidian".to_string(),
+                file_count: 5,
+                timestamp: ts,
+            },
         ];
 
         for event in &events {
@@ -948,6 +1067,89 @@ mod tests {
                 "Debug output too short for {:?}",
                 event.event_name()
             );
+        }
+    }
+
+    #[test]
+    fn test_insight_event_serialization() {
+        let ts = Timestamp::now();
+        let id = Uuid::new_v4();
+
+        // SummaryGenerated
+        let event = DomainEvent::SummaryGenerated {
+            summary_id: id,
+            chunk_count: 5,
+            source_app: Some("Chrome".to_string()),
+            timestamp: ts,
+        };
+        assert_eq!(event.event_name(), "summary_generated");
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(rt.event_name(), "summary_generated");
+        assert_eq!(rt.timestamp(), ts);
+
+        // EntitiesExtracted
+        let event = DomainEvent::EntitiesExtracted {
+            entity_count: 3,
+            entity_types: vec!["person".to_string(), "url".to_string()],
+            timestamp: ts,
+        };
+        assert_eq!(event.event_name(), "entities_extracted");
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(rt.event_name(), "entities_extracted");
+
+        // DailyDigestGenerated
+        let event = DomainEvent::DailyDigestGenerated {
+            date: "2026-02-18".to_string(),
+            summary_count: 10,
+            entity_count: 25,
+            timestamp: ts,
+        };
+        assert_eq!(event.event_name(), "daily_digest_generated");
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(rt.event_name(), "daily_digest_generated");
+
+        // TopicClustered
+        let event = DomainEvent::TopicClustered {
+            cluster_count: 4,
+            summary_count: 10,
+            timestamp: ts,
+        };
+        assert_eq!(event.event_name(), "topic_clustered");
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(rt.event_name(), "topic_clustered");
+
+        // InsightExported
+        let event = DomainEvent::InsightExported {
+            path: "/vault/daily".to_string(),
+            format: "obsidian".to_string(),
+            file_count: 3,
+            timestamp: ts,
+        };
+        assert_eq!(event.event_name(), "insight_exported");
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(rt.event_name(), "insight_exported");
+    }
+
+    #[test]
+    fn test_summary_generated_none_source_app() {
+        let ts = Timestamp::now();
+        let event = DomainEvent::SummaryGenerated {
+            summary_id: Uuid::new_v4(),
+            chunk_count: 3,
+            source_app: None,
+            timestamp: ts,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        if let DomainEvent::SummaryGenerated { source_app, .. } = &rt {
+            assert!(source_app.is_none());
+        } else {
+            panic!("Expected SummaryGenerated variant");
         }
     }
 
@@ -1015,6 +1217,20 @@ mod tests {
     }
 
     #[test]
+    fn test_domain_event_to_json() {
+        let ts = Timestamp::now();
+        let event = DomainEvent::ScreenCaptured {
+            frame_id: Uuid::new_v4(),
+            timestamp: ts,
+        };
+        let json = event.to_json();
+        assert_eq!(json["event"], "screen_captured");
+        assert_eq!(json["timestamp"], ts.0);
+        assert!(json["data"].is_object());
+        assert!(json["data"]["ScreenCaptured"].is_object());
+    }
+
+    #[test]
     fn test_event_timestamp_method_consistency() {
         let ts = Timestamp(1700000000);
 
@@ -1030,13 +1246,16 @@ mod tests {
     }
 
     #[test]
-    fn test_domain_event_count_is_30() {
+    fn test_domain_event_count_is_35() {
         // Create one of each variant to verify count
         let ts = Timestamp::now();
         let id = Uuid::new_v4();
         let sid = Uuid::new_v4();
         let events: Vec<DomainEvent> = vec![
-            DomainEvent::ScreenCaptured { frame_id: id, timestamp: ts },
+            DomainEvent::ScreenCaptured {
+                frame_id: id,
+                timestamp: ts,
+            },
             DomainEvent::TextExtracted {
                 frame_id: id,
                 app_name: AppName("A".to_string()),
@@ -1044,35 +1263,184 @@ mod tests {
                 text_length: 1,
                 timestamp: ts,
             },
-            DomainEvent::FrameSkipped { frame_id: id, reason: FrameSkipReason::NoChange, timestamp: ts },
-            DomainEvent::FrameDeduplicated { frame_id: id, similarity: 0.99, timestamp: ts },
-            DomainEvent::CaptureStarted { session_id: sid, timestamp: ts },
-            DomainEvent::CapturePaused { session_id: sid, timestamp: ts },
-            DomainEvent::CaptureResumed { session_id: sid, timestamp: ts },
-            DomainEvent::CaptureSessionStopped { session_id: sid, frame_count: 1, duration_secs: 1.0, timestamp: ts },
-            DomainEvent::AudioChunkReceived { chunk_id: id, session_id: sid, duration_secs: 1.0, timestamp: ts },
-            DomainEvent::SpeechTranscribed { chunk_id: id, text: "t".to_string(), confidence: 0.9, duration_secs: 1.0, timestamp: ts },
-            DomainEvent::AudioChunkTranscribed { chunk_id: id, text_length: 1, language: "en".to_string(), timestamp: ts },
-            DomainEvent::SilenceDetected { duration_secs: 1.0, timestamp: ts },
-            DomainEvent::AudioSessionStarted { session_id: sid, device_name: "m".to_string(), timestamp: ts },
-            DomainEvent::AudioSessionStopped { session_id: sid, device_name: "m".to_string(), chunks_captured: 1, timestamp: ts },
-            DomainEvent::TranscriptionFailed { chunk_id: id, reason: "e".to_string(), timestamp: ts },
-            DomainEvent::DictationStarted { session_id: sid, mode: DictationMode::Type, timestamp: ts },
-            DomainEvent::DictationCompleted { session_id: sid, text: "t".to_string(), target_app: AppName("A".to_string()), duration_secs: 1.0, timestamp: ts },
-            DomainEvent::DictationCancelled { session_id: sid, timestamp: ts },
-            DomainEvent::DictationFailed { session_id: sid, reason: "e".to_string(), timestamp: ts },
-            DomainEvent::DictationSilenceTimeout { session_id: sid, silence_duration_secs: 1, timestamp: ts },
-            DomainEvent::DictationMaxDuration { session_id: sid, duration_secs: 1, timestamp: ts },
-            DomainEvent::StorageTierChanged { entry_id: id, from_tier: StorageTier::Hot, to_tier: StorageTier::Warm, timestamp: ts },
-            DomainEvent::VectorQuantized { entry_id: id, from_format: VectorFormat::F32, to_format: VectorFormat::Int8, timestamp: ts },
-            DomainEvent::StoragePurgeCompleted { entries_processed: 1, bytes_reclaimed: 1, timestamp: ts },
-            DomainEvent::PiiRedacted { entry_id: id, redaction_count: 1, redaction_types: vec!["e".to_string()], timestamp: ts },
-            DomainEvent::SearchPerformed { query: "q".to_string(), result_count: 1, route: "s".to_string(), latency_ms: 1, timestamp: ts },
-            DomainEvent::ConfigUpdated { changed_sections: vec!["g".to_string()], timestamp: ts },
-            DomainEvent::ApplicationStarted { version: "1".to_string(), config_path: "/".to_string(), timestamp: ts },
-            DomainEvent::ApplicationShutdown { uptime_secs: 1, clean_exit: true, timestamp: ts },
-            DomainEvent::ComponentHealthChanged { component: "c".to_string(), healthy: true, reason: "ok".to_string(), timestamp: ts },
+            DomainEvent::FrameSkipped {
+                frame_id: id,
+                reason: FrameSkipReason::NoChange,
+                timestamp: ts,
+            },
+            DomainEvent::FrameDeduplicated {
+                frame_id: id,
+                similarity: 0.99,
+                timestamp: ts,
+            },
+            DomainEvent::CaptureStarted {
+                session_id: sid,
+                timestamp: ts,
+            },
+            DomainEvent::CapturePaused {
+                session_id: sid,
+                timestamp: ts,
+            },
+            DomainEvent::CaptureResumed {
+                session_id: sid,
+                timestamp: ts,
+            },
+            DomainEvent::CaptureSessionStopped {
+                session_id: sid,
+                frame_count: 1,
+                duration_secs: 1.0,
+                timestamp: ts,
+            },
+            DomainEvent::AudioChunkReceived {
+                chunk_id: id,
+                session_id: sid,
+                duration_secs: 1.0,
+                timestamp: ts,
+            },
+            DomainEvent::SpeechTranscribed {
+                chunk_id: id,
+                text: "t".to_string(),
+                confidence: 0.9,
+                duration_secs: 1.0,
+                timestamp: ts,
+            },
+            DomainEvent::AudioChunkTranscribed {
+                chunk_id: id,
+                text_length: 1,
+                language: "en".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::SilenceDetected {
+                duration_secs: 1.0,
+                timestamp: ts,
+            },
+            DomainEvent::AudioSessionStarted {
+                session_id: sid,
+                device_name: "m".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::AudioSessionStopped {
+                session_id: sid,
+                device_name: "m".to_string(),
+                chunks_captured: 1,
+                timestamp: ts,
+            },
+            DomainEvent::TranscriptionFailed {
+                chunk_id: id,
+                reason: "e".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::DictationStarted {
+                session_id: sid,
+                mode: DictationMode::Type,
+                timestamp: ts,
+            },
+            DomainEvent::DictationCompleted {
+                session_id: sid,
+                text: "t".to_string(),
+                target_app: AppName("A".to_string()),
+                duration_secs: 1.0,
+                timestamp: ts,
+            },
+            DomainEvent::DictationCancelled {
+                session_id: sid,
+                timestamp: ts,
+            },
+            DomainEvent::DictationFailed {
+                session_id: sid,
+                reason: "e".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::DictationSilenceTimeout {
+                session_id: sid,
+                silence_duration_secs: 1,
+                timestamp: ts,
+            },
+            DomainEvent::DictationMaxDuration {
+                session_id: sid,
+                duration_secs: 1,
+                timestamp: ts,
+            },
+            DomainEvent::StorageTierChanged {
+                entry_id: id,
+                from_tier: StorageTier::Hot,
+                to_tier: StorageTier::Warm,
+                timestamp: ts,
+            },
+            DomainEvent::VectorQuantized {
+                entry_id: id,
+                from_format: VectorFormat::F32,
+                to_format: VectorFormat::Int8,
+                timestamp: ts,
+            },
+            DomainEvent::StoragePurgeCompleted {
+                entries_processed: 1,
+                bytes_reclaimed: 1,
+                timestamp: ts,
+            },
+            DomainEvent::PiiRedacted {
+                entry_id: id,
+                redaction_count: 1,
+                redaction_types: vec!["e".to_string()],
+                timestamp: ts,
+            },
+            DomainEvent::SearchPerformed {
+                query: "q".to_string(),
+                result_count: 1,
+                route: "s".to_string(),
+                latency_ms: 1,
+                timestamp: ts,
+            },
+            DomainEvent::ConfigUpdated {
+                changed_sections: vec!["g".to_string()],
+                timestamp: ts,
+            },
+            DomainEvent::ApplicationStarted {
+                version: "1".to_string(),
+                config_path: "/".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::ApplicationShutdown {
+                uptime_secs: 1,
+                clean_exit: true,
+                timestamp: ts,
+            },
+            DomainEvent::ComponentHealthChanged {
+                component: "c".to_string(),
+                healthy: true,
+                reason: "ok".to_string(),
+                timestamp: ts,
+            },
+            // Insight pipeline events
+            DomainEvent::SummaryGenerated {
+                summary_id: id,
+                chunk_count: 5,
+                source_app: Some("Chrome".to_string()),
+                timestamp: ts,
+            },
+            DomainEvent::EntitiesExtracted {
+                entity_count: 3,
+                entity_types: vec!["person".to_string(), "url".to_string()],
+                timestamp: ts,
+            },
+            DomainEvent::DailyDigestGenerated {
+                date: "2026-02-18".to_string(),
+                summary_count: 10,
+                entity_count: 25,
+                timestamp: ts,
+            },
+            DomainEvent::TopicClustered {
+                cluster_count: 4,
+                summary_count: 10,
+                timestamp: ts,
+            },
+            DomainEvent::InsightExported {
+                path: "/vault".to_string(),
+                format: "obsidian".to_string(),
+                file_count: 3,
+                timestamp: ts,
+            },
         ];
-        assert_eq!(events.len(), 30);
+        assert_eq!(events.len(), 35);
     }
 }

@@ -14,7 +14,10 @@ use engram_core::error::EngramError;
 use engram_core::safety::{SafetyDecision, SafetyGate};
 use engram_core::types::{AudioChunk, DictationEntry, ScreenFrame};
 
-use engram_storage::{AudioRepository, CaptureRepository, Database, DictationRepository, VectorMetadata, VectorMetadataRepository};
+use engram_storage::{
+    AudioRepository, CaptureRepository, Database, DictationRepository, VectorMetadata,
+    VectorMetadataRepository,
+};
 
 use crate::embedding::{DynEmbeddingService, EmbeddingService};
 use crate::index::VectorIndex;
@@ -90,7 +93,10 @@ impl EngramPipeline {
     }
 
     /// Create a new pipeline with the default safety config and dedup threshold of 0.95.
-    pub fn with_defaults(index: Arc<VectorIndex>, embedder: impl EmbeddingService + 'static) -> Self {
+    pub fn with_defaults(
+        index: Arc<VectorIndex>,
+        embedder: impl EmbeddingService + 'static,
+    ) -> Self {
         Self::new(index, embedder, SafetyConfig::default(), 0.95)
     }
 
@@ -125,7 +131,10 @@ impl EngramPipeline {
 
         // Dual-write: persist to SQLite if database is attached.
         if let Some(db) = &self.database {
-            if matches!(result, IngestResult::Stored { .. } | IngestResult::Redacted { .. }) {
+            if matches!(
+                result,
+                IngestResult::Stored { .. } | IngestResult::Redacted { .. }
+            ) {
                 frame.text = safe_text;
                 CaptureRepository::new(Arc::clone(db)).save(&frame)?;
             }
@@ -152,10 +161,15 @@ impl EngramPipeline {
             "confidence": chunk.confidence,
         });
 
-        let (result, safe_text) = self.ingest_text(chunk.id, &chunk.transcription, metadata).await?;
+        let (result, safe_text) = self
+            .ingest_text(chunk.id, &chunk.transcription, metadata)
+            .await?;
 
         if let Some(db) = &self.database {
-            if matches!(result, IngestResult::Stored { .. } | IngestResult::Redacted { .. }) {
+            if matches!(
+                result,
+                IngestResult::Stored { .. } | IngestResult::Redacted { .. }
+            ) {
                 chunk.transcription = safe_text;
                 AudioRepository::new(Arc::clone(db)).save(&chunk)?;
             }
@@ -188,7 +202,10 @@ impl EngramPipeline {
         let (result, safe_text) = self.ingest_text(entry.id, &entry.text, metadata).await?;
 
         if let Some(db) = &self.database {
-            if matches!(result, IngestResult::Stored { .. } | IngestResult::Redacted { .. }) {
+            if matches!(
+                result,
+                IngestResult::Stored { .. } | IngestResult::Redacted { .. }
+            ) {
                 entry.text = safe_text;
                 DictationRepository::new(Arc::clone(db)).save(&entry)?;
             }
@@ -311,7 +328,12 @@ mod tests {
     }
 
     fn make_pipeline_with_safety(config: SafetyConfig) -> EngramPipeline {
-        EngramPipeline::new(Arc::new(VectorIndex::new()), MockEmbedding::new(), config, 0.95)
+        EngramPipeline::new(
+            Arc::new(VectorIndex::new()),
+            MockEmbedding::new(),
+            config,
+            0.95,
+        )
     }
 
     fn make_screen_frame(text: &str) -> ScreenFrame {
@@ -478,7 +500,9 @@ mod tests {
 
         let result = pipeline.ingest_screen(frame).await.unwrap();
         match result {
-            IngestResult::Redacted { redaction_count, .. } => {
+            IngestResult::Redacted {
+                redaction_count, ..
+            } => {
                 assert_eq!(redaction_count, 1);
             }
             other => panic!("Expected Redacted, got {:?}", other),
@@ -555,8 +579,9 @@ mod tests {
 
     fn make_pipeline_with_db() -> (EngramPipeline, Arc<Database>) {
         let db = Arc::new(Database::in_memory().unwrap());
-        let pipeline = EngramPipeline::with_defaults(Arc::new(VectorIndex::new()), MockEmbedding::new())
-            .with_database(Arc::clone(&db));
+        let pipeline =
+            EngramPipeline::with_defaults(Arc::new(VectorIndex::new()), MockEmbedding::new())
+                .with_database(Arc::clone(&db));
         (pipeline, db)
     }
 
@@ -697,7 +722,10 @@ mod tests {
         // Verify vector metadata was written to SQLite.
         let repo = VectorMetadataRepository::new(db);
         let meta = repo.find_by_id(id).unwrap();
-        assert!(meta.is_some(), "Vector metadata should be written on ingest");
+        assert!(
+            meta.is_some(),
+            "Vector metadata should be written on ingest"
+        );
         let meta = meta.unwrap();
         assert_eq!(meta.content_type, "screen");
         assert_eq!(meta.format, "float32");

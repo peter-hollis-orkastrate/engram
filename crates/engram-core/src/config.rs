@@ -27,6 +27,8 @@ pub struct EngramConfig {
     pub storage: StorageConfig,
     #[serde(default)]
     pub safety: SafetyConfig,
+    #[serde(default)]
+    pub insight: InsightConfig,
 }
 
 // Default is derived via #[derive(Default)] on each sub-config's #[serde(default)].
@@ -63,9 +65,7 @@ impl EngramConfig {
         if let Some(obj) = update.as_object() {
             for key in obj.keys() {
                 if SafetyConfig::is_protected_field(key) {
-                    return Err(EngramError::ProtectedField {
-                        field: key.clone(),
-                    });
+                    return Err(EngramError::ProtectedField { field: key.clone() });
                 }
             }
         }
@@ -493,6 +493,96 @@ impl Default for QuantizationConfig {
             hot_format: "f32".to_string(),
             warm_format: "int8".to_string(),
             cold_format: "binary".to_string(),
+        }
+    }
+}
+
+/// Configuration for the intelligence/insight pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InsightConfig {
+    /// Whether the insight pipeline is enabled.
+    pub enabled: bool,
+    /// Minutes between automatic summarization runs.
+    pub summary_interval_minutes: u32,
+    /// Minimum number of chunks required to generate a summary.
+    pub min_chunks_for_summary: u32,
+    /// Time of day to generate the daily digest (HH:MM format).
+    pub digest_time: String,
+    /// Cosine similarity threshold for topic clustering.
+    pub cluster_threshold: f64,
+    /// Maximum number of bullet points per summary.
+    pub max_bullet_points: u32,
+    /// Export configuration for vault/Obsidian integration.
+    #[serde(default)]
+    pub export: InsightExportConfig,
+}
+
+fn default_summary_interval() -> u32 {
+    30
+}
+
+fn default_min_chunks() -> u32 {
+    3
+}
+
+fn default_digest_time() -> String {
+    "18:00".to_string()
+}
+
+fn default_cluster_threshold() -> f64 {
+    0.75
+}
+
+fn default_max_bullets() -> u32 {
+    5
+}
+
+impl Default for InsightConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            summary_interval_minutes: default_summary_interval(),
+            min_chunks_for_summary: default_min_chunks(),
+            digest_time: default_digest_time(),
+            cluster_threshold: default_cluster_threshold(),
+            max_bullet_points: default_max_bullets(),
+            export: InsightExportConfig::default(),
+        }
+    }
+}
+
+/// Export configuration for the insight pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InsightExportConfig {
+    /// Whether export is enabled.
+    pub enabled: bool,
+    /// Path to the Obsidian vault directory.
+    pub vault_path: String,
+    /// Export format: "obsidian" or other.
+    pub format: String,
+    /// Whether to export the daily digest.
+    pub export_daily_digest: bool,
+    /// Whether to export summaries.
+    pub export_summaries: bool,
+    /// Whether to export entities.
+    pub export_entities: bool,
+}
+
+fn default_export_format() -> String {
+    "obsidian".to_string()
+}
+
+impl Default for InsightExportConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            vault_path: String::new(),
+            format: default_export_format(),
+            export_daily_digest: true,
+            export_summaries: true,
+            export_entities: true,
         }
     }
 }
@@ -955,10 +1045,14 @@ cold_format = "binary"
     fn test_safety_fields_protected() {
         assert!(SafetyConfig::is_protected_field("safety"));
         assert!(SafetyConfig::is_protected_field("safety.pii_detection"));
-        assert!(SafetyConfig::is_protected_field("safety.credit_card_redaction"));
+        assert!(SafetyConfig::is_protected_field(
+            "safety.credit_card_redaction"
+        ));
         assert!(SafetyConfig::is_protected_field("safety.ssn_redaction"));
         assert!(SafetyConfig::is_protected_field("safety.phone_redaction"));
-        assert!(SafetyConfig::is_protected_field("safety.custom_deny_patterns"));
+        assert!(SafetyConfig::is_protected_field(
+            "safety.custom_deny_patterns"
+        ));
     }
 
     #[test]
@@ -1154,5 +1248,88 @@ ssn_redaction = true
         assert!(!reloaded.tray.show_stats);
         assert!(!reloaded.tray.quick_search);
         assert!(!reloaded.safety.phone_redaction);
+    }
+
+    // =========================================================================
+    // Phase 4 M1: InsightConfig tests
+    // =========================================================================
+
+    #[test]
+    fn test_insight_config_defaults() {
+        let config = InsightConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.summary_interval_minutes, 30);
+        assert_eq!(config.min_chunks_for_summary, 3);
+        assert_eq!(config.digest_time, "18:00");
+        assert!((config.cluster_threshold - 0.75).abs() < f64::EPSILON);
+        assert_eq!(config.max_bullet_points, 5);
+    }
+
+    #[test]
+    fn test_insight_export_config_defaults() {
+        let config = InsightExportConfig::default();
+        assert!(!config.enabled);
+        assert!(config.vault_path.is_empty());
+        assert_eq!(config.format, "obsidian");
+        assert!(config.export_daily_digest);
+        assert!(config.export_summaries);
+        assert!(config.export_entities);
+    }
+
+    #[test]
+    fn test_engram_config_has_insight_default() {
+        let config = EngramConfig::default();
+        assert!(config.insight.enabled);
+        assert_eq!(config.insight.summary_interval_minutes, 30);
+        assert!(!config.insight.export.enabled);
+    }
+
+    #[test]
+    fn test_insight_config_roundtrip() {
+        let mut config = EngramConfig::default();
+        config.insight.enabled = false;
+        config.insight.summary_interval_minutes = 15;
+        config.insight.min_chunks_for_summary = 5;
+        config.insight.digest_time = "20:00".to_string();
+        config.insight.cluster_threshold = 0.8;
+        config.insight.max_bullet_points = 10;
+        config.insight.export.enabled = true;
+        config.insight.export.vault_path = "/vault/engram".to_string();
+        config.insight.export.format = "markdown".to_string();
+        config.insight.export.export_daily_digest = false;
+        config.insight.export.export_summaries = false;
+        config.insight.export.export_entities = false;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        config.save(&path).unwrap();
+
+        let reloaded = EngramConfig::load(&path).unwrap();
+        assert!(!reloaded.insight.enabled);
+        assert_eq!(reloaded.insight.summary_interval_minutes, 15);
+        assert_eq!(reloaded.insight.min_chunks_for_summary, 5);
+        assert_eq!(reloaded.insight.digest_time, "20:00");
+        assert!((reloaded.insight.cluster_threshold - 0.8).abs() < f64::EPSILON);
+        assert_eq!(reloaded.insight.max_bullet_points, 10);
+        assert!(reloaded.insight.export.enabled);
+        assert_eq!(reloaded.insight.export.vault_path, "/vault/engram");
+        assert_eq!(reloaded.insight.export.format, "markdown");
+        assert!(!reloaded.insight.export.export_daily_digest);
+        assert!(!reloaded.insight.export.export_summaries);
+        assert!(!reloaded.insight.export.export_entities);
+    }
+
+    #[test]
+    fn test_old_config_without_insight_loads_defaults() {
+        let content = r#"
+[general]
+data_dir = "/old/data"
+"#;
+        let file = create_temp_config(content);
+        let config = EngramConfig::load(file.path()).unwrap();
+        // Insight section should use defaults
+        assert!(config.insight.enabled);
+        assert_eq!(config.insight.summary_interval_minutes, 30);
+        assert!(!config.insight.export.enabled);
     }
 }

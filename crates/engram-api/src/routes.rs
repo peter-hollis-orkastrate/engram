@@ -4,10 +4,10 @@
 //! and all endpoint handlers.
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::{header, HeaderValue, Method};
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::compression::CompressionLayer;
-use axum::http::{header, HeaderValue, Method};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -30,12 +30,26 @@ pub fn create_router(state: AppState) -> Router {
     let dev_port = port.saturating_add(1);
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list([
-            format!("http://127.0.0.1:{}", port).parse::<HeaderValue>().unwrap(),
-            format!("http://localhost:{}", port).parse::<HeaderValue>().unwrap(),
-            format!("http://127.0.0.1:{}", dev_port).parse::<HeaderValue>().unwrap(),
-            format!("http://localhost:{}", dev_port).parse::<HeaderValue>().unwrap(),
+            format!("http://127.0.0.1:{}", port)
+                .parse::<HeaderValue>()
+                .unwrap(),
+            format!("http://localhost:{}", port)
+                .parse::<HeaderValue>()
+                .unwrap(),
+            format!("http://127.0.0.1:{}", dev_port)
+                .parse::<HeaderValue>()
+                .unwrap(),
+            format!("http://localhost:{}", dev_port)
+                .parse::<HeaderValue>()
+                .unwrap(),
         ]))
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT]);
 
     // Routes that do NOT require authentication.
@@ -71,20 +85,31 @@ pub fn create_router(state: AppState) -> Router {
         .route("/search/hybrid", get(handlers::search_hybrid))
         .route("/search/raw", get(handlers::search_raw))
         .route("/ingest", post(handlers::ingest))
-        .layer(axum::middleware::from_fn(crate::rate_limit::rate_limit_middleware))
+        .route("/insights/daily", get(handlers::get_daily_digest))
+        .route(
+            "/insights/daily/{date}",
+            get(handlers::get_daily_digest_by_date),
+        )
+        .route("/insights/topics", get(handlers::get_topics))
+        .route("/entities", get(handlers::get_entities))
+        .route("/summaries", get(handlers::get_summaries))
+        .route("/insights/export", post(handlers::trigger_export))
+        .layer(axum::middleware::from_fn(
+            crate::rate_limit::rate_limit_middleware,
+        ))
         .layer(axum::Extension(limiter));
 
     // SSE stream exempt from rate limiting.
-    let stream_routes = Router::new()
-        .route("/stream", get(handlers::stream));
+    let stream_routes = Router::new().route("/stream", get(handlers::stream));
 
     // Combine all protected routes behind auth.
-    let protected_routes = rate_limited_routes
-        .merge(stream_routes)
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            crate::auth::require_auth,
-        ));
+    let protected_routes =
+        rate_limited_routes
+            .merge(stream_routes)
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::auth::require_auth,
+            ));
 
     public_routes
         .merge(protected_routes)

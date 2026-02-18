@@ -503,7 +503,10 @@ mod tests {
         let gate = default_gate();
         let decision = gate.check("pay with 4111-1111-1111-1111 please");
         match decision {
-            SafetyDecision::Redacted { text, redaction_count } => {
+            SafetyDecision::Redacted {
+                text,
+                redaction_count,
+            } => {
                 assert_eq!(text, "pay with [CC_REDACTED] please");
                 assert_eq!(redaction_count, 1);
             }
@@ -537,7 +540,10 @@ mod tests {
         let gate = default_gate();
         let decision = gate.check("my ssn is 123-45-6789");
         match decision {
-            SafetyDecision::Redacted { text, redaction_count } => {
+            SafetyDecision::Redacted {
+                text,
+                redaction_count,
+            } => {
                 assert_eq!(text, "my ssn is [SSN_REDACTED]");
                 assert_eq!(redaction_count, 1);
             }
@@ -559,7 +565,10 @@ mod tests {
         let gate = default_gate();
         let decision = gate.check("contact user@example.com for info");
         match decision {
-            SafetyDecision::Redacted { text, redaction_count } => {
+            SafetyDecision::Redacted {
+                text,
+                redaction_count,
+            } => {
                 assert_eq!(text, "contact [EMAIL_REDACTED] for info");
                 assert_eq!(redaction_count, 1);
             }
@@ -572,7 +581,10 @@ mod tests {
         let gate = default_gate();
         let decision = gate.check("a@b.com and c@d.org");
         match decision {
-            SafetyDecision::Redacted { text, redaction_count } => {
+            SafetyDecision::Redacted {
+                text,
+                redaction_count,
+            } => {
                 assert_eq!(text, "[EMAIL_REDACTED] and [EMAIL_REDACTED]");
                 assert_eq!(redaction_count, 2);
             }
@@ -626,7 +638,10 @@ mod tests {
         let gate = default_gate();
         let decision = gate.check("ssn 123-45-6789 and email user@test.com");
         match decision {
-            SafetyDecision::Redacted { text, redaction_count } => {
+            SafetyDecision::Redacted {
+                text,
+                redaction_count,
+            } => {
                 assert!(text.contains("[SSN_REDACTED]"));
                 assert!(text.contains("[EMAIL_REDACTED]"));
                 assert_eq!(redaction_count, 2);
@@ -739,7 +754,10 @@ mod tests {
         let gate = default_gate();
         let decision = gate.check("card 6304000000000000018 end");
         match decision {
-            SafetyDecision::Redacted { text, redaction_count } => {
+            SafetyDecision::Redacted {
+                text,
+                redaction_count,
+            } => {
                 assert_eq!(text, "card [CC_REDACTED] end");
                 assert_eq!(redaction_count, 1);
             }
@@ -807,19 +825,14 @@ mod tests {
 
     #[test]
     fn test_phone_multiple() {
-        let (text, count) =
-            redact_phone_numbers("home 555-123-4567 work (800) 555-1234");
-        assert_eq!(
-            text,
-            "home [REDACTED-PHONE] work [REDACTED-PHONE]"
-        );
+        let (text, count) = redact_phone_numbers("home 555-123-4567 work (800) 555-1234");
+        assert_eq!(text, "home [REDACTED-PHONE] work [REDACTED-PHONE]");
         assert_eq!(count, 2);
     }
 
     #[test]
     fn test_phone_three_different_formats() {
-        let (text, count) =
-            redact_phone_numbers("a 555-111-2222, b (555)333-4444, c +15555556666");
+        let (text, count) = redact_phone_numbers("a 555-111-2222, b (555)333-4444, c +15555556666");
         assert_eq!(
             text,
             "a [REDACTED-PHONE], b [REDACTED-PHONE], c [REDACTED-PHONE]"
@@ -914,8 +927,7 @@ mod tests {
 
     #[test]
     fn test_no_redact_url_path() {
-        let (text, count) =
-            redact_phone_numbers("http://api.com/users/5551234567/profile");
+        let (text, count) = redact_phone_numbers("http://api.com/users/5551234567/profile");
         // The /5551234567/ has a leading '/' so should not be redacted
         assert_eq!(text, "http://api.com/users/5551234567/profile");
         assert_eq!(count, 0);
@@ -983,7 +995,10 @@ mod tests {
         let gate = default_gate();
         let decision = gate.check("call 555-123-4567 now");
         match decision {
-            SafetyDecision::Redacted { text, redaction_count } => {
+            SafetyDecision::Redacted {
+                text,
+                redaction_count,
+            } => {
                 assert_eq!(text, "call [REDACTED-PHONE] now");
                 assert_eq!(redaction_count, 1);
             }
@@ -996,10 +1011,12 @@ mod tests {
     #[test]
     fn test_phone_and_email_combined() {
         let gate = default_gate();
-        let decision =
-            gate.check("email user@test.com phone 555-123-4567");
+        let decision = gate.check("email user@test.com phone 555-123-4567");
         match decision {
-            SafetyDecision::Redacted { text, redaction_count } => {
+            SafetyDecision::Redacted {
+                text,
+                redaction_count,
+            } => {
                 assert!(text.contains("[EMAIL_REDACTED]"));
                 assert!(text.contains("[REDACTED-PHONE]"));
                 assert_eq!(redaction_count, 2);
@@ -1011,10 +1028,12 @@ mod tests {
     #[test]
     fn test_phone_and_ssn_combined() {
         let gate = default_gate();
-        let decision =
-            gate.check("ssn 123-45-6789 phone (555) 123-4567");
+        let decision = gate.check("ssn 123-45-6789 phone (555) 123-4567");
         match decision {
-            SafetyDecision::Redacted { text, redaction_count } => {
+            SafetyDecision::Redacted {
+                text,
+                redaction_count,
+            } => {
                 assert!(text.contains("[SSN_REDACTED]"));
                 assert!(text.contains("[REDACTED-PHONE]"));
                 assert_eq!(redaction_count, 2);
@@ -1026,11 +1045,12 @@ mod tests {
     #[test]
     fn test_phone_email_ssn_all_combined() {
         let gate = default_gate();
-        let decision = gate.check(
-            "ssn 123-45-6789, email a@b.com, phone 555-123-4567",
-        );
+        let decision = gate.check("ssn 123-45-6789, email a@b.com, phone 555-123-4567");
         match decision {
-            SafetyDecision::Redacted { text, redaction_count } => {
+            SafetyDecision::Redacted {
+                text,
+                redaction_count,
+            } => {
                 assert!(text.contains("[SSN_REDACTED]"));
                 assert!(text.contains("[EMAIL_REDACTED]"));
                 assert!(text.contains("[REDACTED-PHONE]"));
@@ -1142,8 +1162,7 @@ mod tests {
 
     #[test]
     fn test_phone_consecutive() {
-        let (text, count) =
-            redact_phone_numbers("555-111-2222 555-333-4444");
+        let (text, count) = redact_phone_numbers("555-111-2222 555-333-4444");
         assert_eq!(text, "[REDACTED-PHONE] [REDACTED-PHONE]");
         assert_eq!(count, 2);
     }

@@ -155,7 +155,10 @@ impl FtsSearch {
         }
 
         // Use FTS5 column filter syntax with sanitized inputs.
-        let fts_query = format!("content_type:{} AND text:{}", sanitized_type, sanitized_query);
+        let fts_query = format!(
+            "content_type:{} AND text:{}",
+            sanitized_type, sanitized_query
+        );
 
         // Call db directly instead of self.search to avoid double-sanitizing.
         self.db.with_conn(|conn| {

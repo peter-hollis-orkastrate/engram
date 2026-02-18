@@ -54,6 +54,53 @@ pub struct DbStats {
     pub db_size_bytes: u64,
 }
 
+/// A summary row from the database.
+#[derive(Debug, Clone)]
+pub struct SummaryRow {
+    pub id: Uuid,
+    pub title: String,
+    pub bullet_points: String,    // JSON array string
+    pub source_chunk_ids: String, // JSON array string
+    pub source_app: Option<String>,
+    pub time_range_start: Option<String>,
+    pub time_range_end: Option<String>,
+    pub created_at: String,
+}
+
+/// An entity row from the database.
+#[derive(Debug, Clone)]
+pub struct EntityRow {
+    pub id: Uuid,
+    pub entity_type: String,
+    pub value: String,
+    pub source_chunk_id: Option<String>,
+    pub source_summary_id: Option<String>,
+    pub confidence: f64,
+    pub created_at: String,
+}
+
+/// A daily digest row from the database.
+#[derive(Debug, Clone)]
+pub struct DigestRow {
+    pub id: Uuid,
+    pub digest_date: String,
+    pub content: String, // JSON string
+    pub summary_count: u32,
+    pub entity_count: u32,
+    pub chunk_count: u32,
+    pub created_at: String,
+}
+
+/// A topic cluster row from the database.
+#[derive(Debug, Clone)]
+pub struct ClusterRow {
+    pub id: Uuid,
+    pub label: String,
+    pub summary_ids: String, // JSON array string
+    pub centroid_embedding: Option<Vec<u8>>,
+    pub created_at: String,
+}
+
 /// Cross-type query service for the API.
 pub struct QueryService {
     db: Arc<Database>,
@@ -110,9 +157,7 @@ impl QueryService {
                 .map_err(|e| EngramError::Storage(format!("Recent query prepare: {}", e)))?;
 
             let rows = stmt
-                .query_map(params_refs.as_slice(), |row| {
-                    Ok(map_capture_row(row))
-                })
+                .query_map(params_refs.as_slice(), |row| Ok(map_capture_row(row)))
                 .map_err(|e| EngramError::Storage(format!("Recent query: {}", e)))?;
 
             let mut results = Vec::new();
@@ -153,10 +198,7 @@ impl QueryService {
                 apps.push(AppSummary {
                     name,
                     capture_count: count as u64,
-                    last_seen: Utc
-                        .timestamp_opt(last_ts, 0)
-                        .single()
-                        .unwrap_or_default(),
+                    last_seen: Utc.timestamp_opt(last_ts, 0).single().unwrap_or_default(),
                 });
             }
             Ok(apps)
@@ -195,8 +237,7 @@ impl QueryService {
 
             let mut segments = Vec::new();
             for row in rows {
-                let (count, start, end) =
-                    row.map_err(|e| EngramError::Storage(e.to_string()))?;
+                let (count, start, end) = row.map_err(|e| EngramError::Storage(e.to_string()))?;
                 segments.push(ActivitySegment {
                     start: Utc.timestamp_opt(start, 0).single().unwrap_or_default(),
                     end: Utc.timestamp_opt(end, 0).single().unwrap_or_default(),
@@ -253,6 +294,372 @@ impl QueryService {
                 dictation_count: dictation as u64,
                 db_size_bytes: (page_count * page_size) as u64,
             })
+        })
+    }
+
+    // =========================================================================
+    // Insight Pipeline Queries
+    // =========================================================================
+
+    /// Store a summary row.
+    #[allow(clippy::too_many_arguments)]
+    pub fn store_summary(
+        &self,
+        id: &str,
+        title: &str,
+        bullet_points: &str,
+        source_chunk_ids: &str,
+        source_app: Option<&str>,
+        time_range_start: Option<&str>,
+        time_range_end: Option<&str>,
+    ) -> Result<(), EngramError> {
+        self.db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO summaries (id, title, bullet_points, source_chunk_ids, source_app, time_range_start, time_range_end)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![id, title, bullet_points, source_chunk_ids, source_app, time_range_start, time_range_end],
+            )
+            .map_err(|e| EngramError::Storage(format!("Store summary: {}", e)))?;
+            Ok(())
+        })
+    }
+
+    /// Get summaries, optionally filtered by date and/or app.
+    pub fn get_summaries(
+        &self,
+        date: Option<&str>,
+        app: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Vec<SummaryRow>, EngramError> {
+        self.db.with_conn(|conn| {
+            let limit_val = limit.unwrap_or(100) as i64;
+            let mut conditions = Vec::new();
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            let mut idx = 1;
+
+            if let Some(d) = date {
+                conditions.push(format!("created_at LIKE ?{}", idx));
+                params.push(Box::new(format!("{}%", d)));
+                idx += 1;
+            }
+            if let Some(a) = app {
+                conditions.push(format!("source_app = ?{}", idx));
+                params.push(Box::new(a.to_string()));
+                idx += 1;
+            }
+
+            let where_clause = if conditions.is_empty() {
+                String::new()
+            } else {
+                format!("WHERE {}", conditions.join(" AND "))
+            };
+
+            let sql = format!(
+                "SELECT id, title, bullet_points, source_chunk_ids, source_app, time_range_start, time_range_end, created_at
+                 FROM summaries {} ORDER BY created_at DESC LIMIT ?{}",
+                where_clause, idx
+            );
+            params.push(Box::new(limit_val));
+
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+
+            let mut stmt = conn.prepare(&sql)
+                .map_err(|e| EngramError::Storage(format!("Get summaries prepare: {}", e)))?;
+
+            let rows = stmt
+                .query_map(params_refs.as_slice(), |row| {
+                    let id_str: String = row.get(0)?;
+                    let title: String = row.get(1)?;
+                    let bullet_points: String = row.get(2)?;
+                    let source_chunk_ids: String = row.get(3)?;
+                    let source_app: Option<String> = row.get(4)?;
+                    let time_range_start: Option<String> = row.get(5)?;
+                    let time_range_end: Option<String> = row.get(6)?;
+                    let created_at: String = row.get(7)?;
+                    Ok((id_str, title, bullet_points, source_chunk_ids, source_app, time_range_start, time_range_end, created_at))
+                })
+                .map_err(|e| EngramError::Storage(format!("Get summaries: {}", e)))?;
+
+            let mut results = Vec::new();
+            for row in rows {
+                let (id_str, title, bullet_points, source_chunk_ids, source_app, time_range_start, time_range_end, created_at) =
+                    row.map_err(|e| EngramError::Storage(e.to_string()))?;
+                results.push(SummaryRow {
+                    id: Uuid::parse_str(&id_str)
+                        .map_err(|e| EngramError::Storage(format!("Invalid UUID: {}", e)))?,
+                    title,
+                    bullet_points,
+                    source_chunk_ids,
+                    source_app,
+                    time_range_start,
+                    time_range_end,
+                    created_at,
+                });
+            }
+            Ok(results)
+        })
+    }
+
+    /// Store an entity row.
+    pub fn store_entity(
+        &self,
+        id: &str,
+        entity_type: &str,
+        value: &str,
+        source_chunk_id: Option<&str>,
+        source_summary_id: Option<&str>,
+        confidence: f64,
+    ) -> Result<(), EngramError> {
+        self.db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO entities (id, entity_type, value, source_chunk_id, source_summary_id, confidence)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![id, entity_type, value, source_chunk_id, source_summary_id, confidence],
+            )
+            .map_err(|e| EngramError::Storage(format!("Store entity: {}", e)))?;
+            Ok(())
+        })
+    }
+
+    /// Get entities, optionally filtered by type and/or since timestamp.
+    pub fn get_entities(
+        &self,
+        entity_type: Option<&str>,
+        since: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Vec<EntityRow>, EngramError> {
+        self.db.with_conn(|conn| {
+            let limit_val = limit.unwrap_or(100) as i64;
+            let mut conditions = Vec::new();
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            let mut idx = 1;
+
+            if let Some(et) = entity_type {
+                conditions.push(format!("entity_type = ?{}", idx));
+                params.push(Box::new(et.to_string()));
+                idx += 1;
+            }
+            if let Some(s) = since {
+                conditions.push(format!("created_at >= ?{}", idx));
+                params.push(Box::new(s.to_string()));
+                idx += 1;
+            }
+
+            let where_clause = if conditions.is_empty() {
+                String::new()
+            } else {
+                format!("WHERE {}", conditions.join(" AND "))
+            };
+
+            let sql = format!(
+                "SELECT id, entity_type, value, source_chunk_id, source_summary_id, confidence, created_at
+                 FROM entities {} ORDER BY created_at DESC LIMIT ?{}",
+                where_clause, idx
+            );
+            params.push(Box::new(limit_val));
+
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+
+            let mut stmt = conn.prepare(&sql)
+                .map_err(|e| EngramError::Storage(format!("Get entities prepare: {}", e)))?;
+
+            let rows = stmt
+                .query_map(params_refs.as_slice(), |row| {
+                    let id_str: String = row.get(0)?;
+                    let entity_type: String = row.get(1)?;
+                    let value: String = row.get(2)?;
+                    let source_chunk_id: Option<String> = row.get(3)?;
+                    let source_summary_id: Option<String> = row.get(4)?;
+                    let confidence: f64 = row.get(5)?;
+                    let created_at: String = row.get(6)?;
+                    Ok((id_str, entity_type, value, source_chunk_id, source_summary_id, confidence, created_at))
+                })
+                .map_err(|e| EngramError::Storage(format!("Get entities: {}", e)))?;
+
+            let mut results = Vec::new();
+            for row in rows {
+                let (id_str, entity_type, value, source_chunk_id, source_summary_id, confidence, created_at) =
+                    row.map_err(|e| EngramError::Storage(e.to_string()))?;
+                results.push(EntityRow {
+                    id: Uuid::parse_str(&id_str)
+                        .map_err(|e| EngramError::Storage(format!("Invalid UUID: {}", e)))?,
+                    entity_type,
+                    value,
+                    source_chunk_id,
+                    source_summary_id,
+                    confidence,
+                    created_at,
+                });
+            }
+            Ok(results)
+        })
+    }
+
+    /// Store a daily digest row.
+    pub fn store_digest(
+        &self,
+        id: &str,
+        digest_date: &str,
+        content: &str,
+        summary_count: u32,
+        entity_count: u32,
+        chunk_count: u32,
+    ) -> Result<(), EngramError> {
+        self.db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO daily_digests (id, digest_date, content, summary_count, entity_count, chunk_count)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![id, digest_date, content, summary_count, entity_count, chunk_count],
+            )
+            .map_err(|e| EngramError::Storage(format!("Store digest: {}", e)))?;
+            Ok(())
+        })
+    }
+
+    /// Get a daily digest by date.
+    pub fn get_digest(&self, date: &str) -> Result<Option<DigestRow>, EngramError> {
+        self.db.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, digest_date, content, summary_count, entity_count, chunk_count, created_at
+                     FROM daily_digests WHERE digest_date = ?1",
+                )
+                .map_err(|e| EngramError::Storage(format!("Get digest prepare: {}", e)))?;
+
+            let mut rows = stmt
+                .query_map(rusqlite::params![date], |row| {
+                    let id_str: String = row.get(0)?;
+                    let digest_date: String = row.get(1)?;
+                    let content: String = row.get(2)?;
+                    let summary_count: u32 = row.get(3)?;
+                    let entity_count: u32 = row.get(4)?;
+                    let chunk_count: u32 = row.get(5)?;
+                    let created_at: String = row.get(6)?;
+                    Ok((id_str, digest_date, content, summary_count, entity_count, chunk_count, created_at))
+                })
+                .map_err(|e| EngramError::Storage(format!("Get digest: {}", e)))?;
+
+            if let Some(row) = rows.next() {
+                let (id_str, digest_date, content, summary_count, entity_count, chunk_count, created_at) =
+                    row.map_err(|e| EngramError::Storage(e.to_string()))?;
+                Ok(Some(DigestRow {
+                    id: Uuid::parse_str(&id_str)
+                        .map_err(|e| EngramError::Storage(format!("Invalid UUID: {}", e)))?,
+                    digest_date,
+                    content,
+                    summary_count,
+                    entity_count,
+                    chunk_count,
+                    created_at,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
+    /// Store a topic cluster row.
+    pub fn store_cluster(
+        &self,
+        id: &str,
+        label: &str,
+        summary_ids: &str,
+        centroid_embedding: Option<&[u8]>,
+    ) -> Result<(), EngramError> {
+        self.db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO topic_clusters (id, label, summary_ids, centroid_embedding)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![id, label, summary_ids, centroid_embedding],
+            )
+            .map_err(|e| EngramError::Storage(format!("Store cluster: {}", e)))?;
+            Ok(())
+        })
+    }
+
+    /// Get topic clusters, optionally filtered by creation date.
+    pub fn get_clusters(&self, since: Option<&str>) -> Result<Vec<ClusterRow>, EngramError> {
+        self.db.with_conn(|conn| {
+            let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                if let Some(s) = since {
+                    (
+                        "SELECT id, label, summary_ids, centroid_embedding, created_at
+                     FROM topic_clusters WHERE created_at >= ?1 ORDER BY created_at DESC",
+                        vec![Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>],
+                    )
+                } else {
+                    (
+                        "SELECT id, label, summary_ids, centroid_embedding, created_at
+                     FROM topic_clusters ORDER BY created_at DESC",
+                        vec![],
+                    )
+                };
+
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
+
+            let mut stmt = conn
+                .prepare(sql)
+                .map_err(|e| EngramError::Storage(format!("Get clusters prepare: {}", e)))?;
+
+            let rows = stmt
+                .query_map(params_refs.as_slice(), |row| {
+                    let id_str: String = row.get(0)?;
+                    let label: String = row.get(1)?;
+                    let summary_ids: String = row.get(2)?;
+                    let centroid_embedding: Option<Vec<u8>> = row.get(3)?;
+                    let created_at: String = row.get(4)?;
+                    Ok((id_str, label, summary_ids, centroid_embedding, created_at))
+                })
+                .map_err(|e| EngramError::Storage(format!("Get clusters: {}", e)))?;
+
+            let mut results = Vec::new();
+            for row in rows {
+                let (id_str, label, summary_ids, centroid_embedding, created_at) =
+                    row.map_err(|e| EngramError::Storage(e.to_string()))?;
+                results.push(ClusterRow {
+                    id: Uuid::parse_str(&id_str)
+                        .map_err(|e| EngramError::Storage(format!("Invalid UUID: {}", e)))?,
+                    label,
+                    summary_ids,
+                    centroid_embedding,
+                    created_at,
+                });
+            }
+            Ok(results)
+        })
+    }
+
+    /// Get capture rows since a given epoch-second timestamp.
+    pub fn get_chunks_since(&self, since_epoch: i64) -> Result<Vec<CaptureRow>, EngramError> {
+        self.db.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, content_type, timestamp, text,
+                            COALESCE(app_name, ''), COALESCE(window_title, ''),
+                            COALESCE(monitor_id, ''), COALESCE(source_device, ''),
+                            COALESCE(duration_secs, 0.0), COALESCE(confidence, 0.0),
+                            COALESCE(mode, '')
+                     FROM captures
+                     WHERE timestamp >= ?1
+                     ORDER BY timestamp ASC",
+                )
+                .map_err(|e| EngramError::Storage(format!("Get chunks since prepare: {}", e)))?;
+
+            let rows = stmt
+                .query_map(rusqlite::params![since_epoch], |row| {
+                    Ok(map_capture_row(row))
+                })
+                .map_err(|e| EngramError::Storage(format!("Get chunks since: {}", e)))?;
+
+            let mut results = Vec::new();
+            for row in rows {
+                let r = row.map_err(|e| EngramError::Storage(e.to_string()))??;
+                results.push(r);
+            }
+            Ok(results)
         })
     }
 }
@@ -438,5 +845,229 @@ mod tests {
         let qs = QueryService::new(db);
         let stats = qs.stats().unwrap();
         assert_eq!(stats.total_captures, 0);
+    }
+
+    // =========================================================================
+    // Insight Pipeline Query Tests
+    // =========================================================================
+
+    #[test]
+    fn test_store_and_get_summary() {
+        let db = make_db();
+        let qs = QueryService::new(db);
+        let id = Uuid::new_v4();
+
+        qs.store_summary(
+            &id.to_string(),
+            "Meeting Notes",
+            r#"["Discussed roadmap","Assigned tasks"]"#,
+            r#"["chunk-1","chunk-2"]"#,
+            Some("Chrome"),
+            Some("2026-02-18T10:00:00"),
+            Some("2026-02-18T11:00:00"),
+        )
+        .unwrap();
+
+        let summaries = qs.get_summaries(None, None, None).unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, id);
+        assert_eq!(summaries[0].title, "Meeting Notes");
+        assert_eq!(summaries[0].source_app, Some("Chrome".to_string()));
+    }
+
+    #[test]
+    fn test_get_summaries_filtered_by_app() {
+        let db = make_db();
+        let qs = QueryService::new(db);
+
+        qs.store_summary(
+            &Uuid::new_v4().to_string(),
+            "S1",
+            "[]",
+            "[]",
+            Some("Chrome"),
+            None,
+            None,
+        )
+        .unwrap();
+        qs.store_summary(
+            &Uuid::new_v4().to_string(),
+            "S2",
+            "[]",
+            "[]",
+            Some("Teams"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let chrome = qs.get_summaries(None, Some("Chrome"), None).unwrap();
+        assert_eq!(chrome.len(), 1);
+        assert_eq!(chrome[0].title, "S1");
+    }
+
+    #[test]
+    fn test_store_and_get_entity() {
+        let db = make_db();
+        let qs = QueryService::new(db);
+        let id = Uuid::new_v4();
+
+        qs.store_entity(
+            &id.to_string(),
+            "person",
+            "Alice Smith",
+            Some("chunk-1"),
+            None,
+            0.95,
+        )
+        .unwrap();
+
+        let entities = qs.get_entities(None, None, None).unwrap();
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].id, id);
+        assert_eq!(entities[0].entity_type, "person");
+        assert_eq!(entities[0].value, "Alice Smith");
+        assert!((entities[0].confidence - 0.95).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_get_entities_filtered_by_type() {
+        let db = make_db();
+        let qs = QueryService::new(db);
+
+        qs.store_entity(
+            &Uuid::new_v4().to_string(),
+            "person",
+            "Alice",
+            Some("c1"),
+            None,
+            0.9,
+        )
+        .unwrap();
+        qs.store_entity(
+            &Uuid::new_v4().to_string(),
+            "url",
+            "https://example.com",
+            Some("c2"),
+            None,
+            1.0,
+        )
+        .unwrap();
+
+        let people = qs.get_entities(Some("person"), None, None).unwrap();
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].value, "Alice");
+    }
+
+    #[test]
+    fn test_store_and_get_digest() {
+        let db = make_db();
+        let qs = QueryService::new(db);
+        let id = Uuid::new_v4();
+
+        qs.store_digest(
+            &id.to_string(),
+            "2026-02-18",
+            r#"{"summaries":[],"entities":[]}"#,
+            10,
+            25,
+            100,
+        )
+        .unwrap();
+
+        let digest = qs.get_digest("2026-02-18").unwrap();
+        assert!(digest.is_some());
+        let d = digest.unwrap();
+        assert_eq!(d.id, id);
+        assert_eq!(d.digest_date, "2026-02-18");
+        assert_eq!(d.summary_count, 10);
+        assert_eq!(d.entity_count, 25);
+        assert_eq!(d.chunk_count, 100);
+    }
+
+    #[test]
+    fn test_get_digest_not_found() {
+        let db = make_db();
+        let qs = QueryService::new(db);
+        let digest = qs.get_digest("2000-01-01").unwrap();
+        assert!(digest.is_none());
+    }
+
+    #[test]
+    fn test_store_and_get_cluster() {
+        let db = make_db();
+        let qs = QueryService::new(db);
+        let id = Uuid::new_v4();
+
+        qs.store_cluster(
+            &id.to_string(),
+            "Work Meetings",
+            r#"["sum-1","sum-2"]"#,
+            None,
+        )
+        .unwrap();
+
+        let clusters = qs.get_clusters(None).unwrap();
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].id, id);
+        assert_eq!(clusters[0].label, "Work Meetings");
+        assert!(clusters[0].centroid_embedding.is_none());
+    }
+
+    #[test]
+    fn test_store_cluster_with_embedding() {
+        let db = make_db();
+        let qs = QueryService::new(db);
+        let id = Uuid::new_v4();
+        let embedding_bytes: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8];
+
+        qs.store_cluster(
+            &id.to_string(),
+            "Tech Topics",
+            r#"["sum-3"]"#,
+            Some(&embedding_bytes),
+        )
+        .unwrap();
+
+        let clusters = qs.get_clusters(None).unwrap();
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].centroid_embedding, Some(embedding_bytes));
+    }
+
+    #[test]
+    fn test_get_chunks_since() {
+        let db = make_db();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        // Insert captures with specific timestamps.
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, app_name, window_title)
+                 VALUES (?1, 'screen', 1000, 'old text', 'App', '')",
+                rusqlite::params![id1.to_string()],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, app_name, window_title)
+                 VALUES (?1, 'screen', 2000, 'new text', 'App', '')",
+                rusqlite::params![id2.to_string()],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+
+        let qs = QueryService::new(db);
+        let chunks = qs.get_chunks_since(1500).unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, "new text");
+    }
+
+    #[test]
+    fn test_get_chunks_since_empty() {
+        let db = make_db();
+        let qs = QueryService::new(db);
+        let chunks = qs.get_chunks_since(0).unwrap();
+        assert!(chunks.is_empty());
     }
 }

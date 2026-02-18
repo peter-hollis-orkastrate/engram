@@ -12,7 +12,12 @@ pub mod search;
 pub mod tier;
 
 pub use db::Database;
-pub use queries::{QueryService, CaptureRow, AppSummary, DbStats};
-pub use repository::{AudioRepository, CaptureRepository, DictationRepository, VectorMetadata, VectorMetadataRepository};
+pub use queries::{
+    AppSummary, CaptureRow, ClusterRow, DbStats, DigestRow, EntityRow, QueryService, SummaryRow,
+};
+pub use repository::{
+    AudioRepository, CaptureRepository, DictationRepository, VectorMetadata,
+    VectorMetadataRepository,
+};
 pub use search::{sanitize_fts5_query, FtsResult, FtsSearch};
 pub use tier::{PurgeResult, TierManager};

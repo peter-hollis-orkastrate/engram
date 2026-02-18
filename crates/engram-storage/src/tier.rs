@@ -62,7 +62,7 @@ impl TierManager {
         let warm_boundary = now - (config.warm_days as i64 * 86400);
 
         let mut records_moved: usize = 0;
-        let records_deleted: usize = 0;
+        let mut records_deleted: usize = 0;
 
         // Move hot -> warm.
         db.with_conn(|conn| {
@@ -91,8 +91,60 @@ impl TierManager {
             Ok(())
         })?;
 
-        // Estimate space reclaimed (rough: text length delta from tier changes).
-        let space_reclaimed_bytes = (records_moved as u64) * 1024; // Rough estimate.
+        // Delete cold records past retention (2x warm_days as cold retention threshold).
+        let cold_retention_boundary = now - (config.warm_days as i64 * 2 * 86400);
+        db.with_conn(|conn| {
+            // Check if summaries table exists for reference protection.
+            let has_summaries: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='summaries'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+                > 0;
+
+            // Check if entities table exists for reference protection.
+            let has_entities: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='entities'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+                > 0;
+
+            let sql = match (has_summaries, has_entities) {
+                (true, true) => {
+                    "DELETE FROM captures WHERE tier = 'cold' AND timestamp < ?1
+                     AND id NOT IN (SELECT value FROM summaries, json_each(summaries.source_chunk_ids))
+                     AND id NOT IN (SELECT source_chunk_id FROM entities)"
+                        .to_string()
+                }
+                (true, false) => {
+                    "DELETE FROM captures WHERE tier = 'cold' AND timestamp < ?1
+                     AND id NOT IN (SELECT value FROM summaries, json_each(summaries.source_chunk_ids))"
+                        .to_string()
+                }
+                (false, true) => {
+                    "DELETE FROM captures WHERE tier = 'cold' AND timestamp < ?1
+                     AND id NOT IN (SELECT source_chunk_id FROM entities)"
+                        .to_string()
+                }
+                (false, false) => {
+                    "DELETE FROM captures WHERE tier = 'cold' AND timestamp < ?1".to_string()
+                }
+            };
+
+            let deleted = conn
+                .execute(&sql, rusqlite::params![cold_retention_boundary])
+                .map_err(|e| EngramError::Storage(format!("Purge cold deletion failed: {}", e)))?;
+            records_deleted += deleted;
+            Ok(())
+        })?;
+
+        // Estimate space reclaimed from both tier moves and deletions.
+        let space_reclaimed_bytes = ((records_moved + records_deleted) as u64) * 1024;
 
         info!(
             records_moved = records_moved,
@@ -161,7 +213,10 @@ mod tests {
     fn test_classify_future_timestamp() {
         let config = default_config();
         let future = Utc::now() + chrono::Duration::days(5);
-        assert_eq!(TierManager::classify_tier(future, &config), StorageTier::Hot);
+        assert_eq!(
+            TierManager::classify_tier(future, &config),
+            StorageTier::Hot
+        );
     }
 
     #[test]
@@ -197,11 +252,9 @@ mod tests {
         // Verify the entry was moved to warm.
         db.with_conn(|conn| {
             let tier: String = conn
-                .query_row(
-                    "SELECT tier FROM captures WHERE id = 'old-1'",
-                    [],
-                    |row| row.get(0),
-                )
+                .query_row("SELECT tier FROM captures WHERE id = 'old-1'", [], |row| {
+                    row.get(0)
+                })
                 .map_err(|e| EngramError::Storage(e.to_string()))?;
             assert_eq!(tier, "warm");
             Ok(())
@@ -281,6 +334,182 @@ mod tests {
                 )
                 .map_err(|e| EngramError::Storage(e.to_string()))?;
             assert_eq!(tier, "hot");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn test_purge_skips_referenced_chunks() {
+        let db = Database::in_memory().unwrap();
+        // 90 days ago — past cold retention (2x warm_days = 60 days).
+        let ancient_ts = Utc::now().timestamp() - (90 * 86400);
+
+        db.with_conn(|conn| {
+            // Insert two ancient cold records.
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, tier)
+                 VALUES ('cold-referenced', 'screen', ?1, 'referenced text', 'cold')",
+                rusqlite::params![ancient_ts],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, tier)
+                 VALUES ('cold-orphan', 'screen', ?1, 'orphan text', 'cold')",
+                rusqlite::params![ancient_ts],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+
+            // Reference one of them in summaries.
+            conn.execute(
+                "INSERT INTO summaries (id, source_chunk_ids) VALUES ('sum-1', ?1)",
+                rusqlite::params![r#"["cold-referenced"]"#],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+
+            Ok(())
+        })
+        .unwrap();
+
+        let config = default_config();
+        let result = TierManager::run_purge(&db, &config).unwrap();
+        // Only the orphan should be deleted; the referenced one should survive.
+        assert_eq!(result.records_deleted, 1);
+
+        db.with_conn(|conn| {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM captures WHERE id = 'cold-referenced'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+            assert_eq!(count, 1, "Referenced chunk should be preserved");
+
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM captures WHERE id = 'cold-orphan'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+            assert_eq!(count, 0, "Orphan chunk should be deleted");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn test_purge_deletes_old_cold_records() {
+        let db = Database::in_memory().unwrap();
+        // 90 days ago — well past 2x warm_days (60 days).
+        let ancient_ts = Utc::now().timestamp() - (90 * 86400);
+        // 10 days ago — should NOT be deleted (within cold retention).
+        let recent_cold_ts = Utc::now().timestamp() - (10 * 86400);
+
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, tier)
+                 VALUES ('cold-old', 'screen', ?1, 'ancient text', 'cold')",
+                rusqlite::params![ancient_ts],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, tier)
+                 VALUES ('cold-recent', 'screen', ?1, 'recent cold text', 'cold')",
+                rusqlite::params![recent_cold_ts],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+
+        let config = default_config(); // warm_days=30, so cold retention = 60 days
+        let result = TierManager::run_purge(&db, &config).unwrap();
+        assert_eq!(result.records_deleted, 1);
+        assert!(result.space_reclaimed_bytes > 0);
+
+        // Verify ancient record was deleted.
+        db.with_conn(|conn| {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM captures WHERE id = 'cold-old'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+            assert_eq!(count, 0, "Ancient cold record should be deleted");
+
+            // Recent cold record should still exist.
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM captures WHERE id = 'cold-recent'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+            assert_eq!(count, 1, "Recent cold record should remain");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn test_purge_skips_entity_referenced_chunks() {
+        let db = Database::in_memory().unwrap();
+        // 90 days ago — past cold retention (2x warm_days = 60 days).
+        let ancient_ts = Utc::now().timestamp() - (90 * 86400);
+
+        db.with_conn(|conn| {
+            // Insert two ancient cold records.
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, tier)
+                 VALUES ('cold-entity-ref', 'screen', ?1, 'entity referenced text', 'cold')",
+                rusqlite::params![ancient_ts],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, tier)
+                 VALUES ('cold-entity-orphan', 'screen', ?1, 'orphan text', 'cold')",
+                rusqlite::params![ancient_ts],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+
+            // Reference one of them via an entity (not a summary).
+            conn.execute(
+                "INSERT INTO entities (id, entity_type, value, source_chunk_id, confidence)
+                 VALUES ('ent-1', 'person', 'Alice', 'cold-entity-ref', 0.9)",
+                [],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+
+            Ok(())
+        })
+        .unwrap();
+
+        let config = default_config();
+        let result = TierManager::run_purge(&db, &config).unwrap();
+        // Only the orphan should be deleted; entity-referenced one should survive.
+        assert_eq!(result.records_deleted, 1);
+
+        db.with_conn(|conn| {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM captures WHERE id = 'cold-entity-ref'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+            assert_eq!(count, 1, "Entity-referenced chunk should be preserved");
+
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM captures WHERE id = 'cold-entity-orphan'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+            assert_eq!(count, 0, "Orphan chunk should be deleted");
             Ok(())
         })
         .unwrap();

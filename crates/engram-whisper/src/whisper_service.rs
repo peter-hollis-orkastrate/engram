@@ -55,7 +55,9 @@ impl WhisperService {
     /// Stub constructor when the `whisper` feature is disabled.
     #[cfg(not(feature = "whisper"))]
     pub fn new(config: WhisperConfig) -> Result<Self, EngramError> {
-        tracing::warn!("WhisperService created without `whisper` feature — transcription will fail");
+        tracing::warn!(
+            "WhisperService created without `whisper` feature — transcription will fail"
+        );
         Ok(Self { config })
     }
 
@@ -123,9 +125,9 @@ impl TranscriptionService for WhisperService {
         params.set_print_timestamps(false);
         params.set_single_segment(false);
 
-        state.full(params, &samples_16k).map_err(|e| {
-            EngramError::Transcription(format!("Whisper inference failed: {}", e))
-        })?;
+        state
+            .full(params, &samples_16k)
+            .map_err(|e| EngramError::Transcription(format!("Whisper inference failed: {}", e)))?;
 
         // Collect segments.
         let n_segments = state.full_n_segments().map_err(|e| {
@@ -257,10 +259,7 @@ mod tests {
         let audio = vec![0.0f32; 16000];
         let result = service.transcribe(&audio, 16000).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("whisper"));
+        assert!(result.unwrap_err().to_string().contains("whisper"));
     }
 
     #[test]

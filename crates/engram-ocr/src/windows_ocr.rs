@@ -123,10 +123,8 @@ fn ocr_from_bmp_bytes(data: &[u8], language: &str) -> Result<String, EngramError
         .map_err(|e| EngramError::Ocr(format!("GetSoftwareBitmap get failed: {}", e)))?;
 
     // Convert to BGRA8 if needed (OCR engine requires Bgra8 or Gray8).
-    let ocr_bitmap =
-        SoftwareBitmap::Convert(&bitmap, BitmapPixelFormat::Bgra8).map_err(|e| {
-            EngramError::Ocr(format!("SoftwareBitmap conversion failed: {}", e))
-        })?;
+    let ocr_bitmap = SoftwareBitmap::Convert(&bitmap, BitmapPixelFormat::Bgra8)
+        .map_err(|e| EngramError::Ocr(format!("SoftwareBitmap conversion failed: {}", e)))?;
 
     // Create the OCR engine for the specified language.
     let lang = Language::CreateLanguage(&HSTRING::from(language))
@@ -214,6 +212,9 @@ mod tests {
         let service = WindowsOcrService::new(OcrConfig::default());
         let result = service.extract_text(&[1, 2, 3]).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("only available on Windows"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("only available on Windows"));
     }
 }

@@ -1081,6 +1081,7 @@ dependencies = [
  "chrono",
  "engram-core",
  "engram-dictation",
+ "engram-insight",
  "engram-storage",
  "engram-ui",
  "engram-vector",
@@ -1110,11 +1111,13 @@ dependencies = [
  "engram-capture",
  "engram-core",
  "engram-dictation",
+ "engram-insight",
  "engram-ocr",
  "engram-storage",
  "engram-ui",
  "engram-vector",
  "engram-whisper",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1179,6 +1182,22 @@ dependencies = [
  "tracing",
  "uuid",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "engram-insight"
+version = "0.1.0"
+dependencies = [
+ "engram-core",
+ "engram-storage",
+ "engram-vector",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

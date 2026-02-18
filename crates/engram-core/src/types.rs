@@ -312,7 +312,12 @@ impl Embedding {
             .zip(&other.0)
             .map(|(a, b)| (*a as f64) * (*b as f64))
             .sum();
-        let mag_a: f64 = self.0.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+        let mag_a: f64 = self
+            .0
+            .iter()
+            .map(|x| (*x as f64).powi(2))
+            .sum::<f64>()
+            .sqrt();
         let mag_b: f64 = other
             .0
             .iter()
@@ -1168,7 +1173,10 @@ mod tests {
         let a = Embedding::new(a_data).unwrap();
         let b = Embedding::new(b_data).unwrap();
         let sim = a.cosine_similarity(&b);
-        assert!(sim.abs() < 1e-6, "Orthogonal vectors should have ~0 similarity");
+        assert!(
+            sim.abs() < 1e-6,
+            "Orthogonal vectors should have ~0 similarity"
+        );
     }
 
     #[test]

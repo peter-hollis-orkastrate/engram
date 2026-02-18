@@ -81,7 +81,10 @@ impl TaskStore {
             )))
         })?;
 
-        let task = tasks.iter_mut().find(|t| t.id == id).ok_or(TaskError::NotFound(id))?;
+        let task = tasks
+            .iter_mut()
+            .find(|t| t.id == id)
+            .ok_or(TaskError::NotFound(id))?;
 
         // Validate transition
         validate_transition(task.status, new_status)?;
@@ -288,10 +291,24 @@ mod tests {
     fn test_list_all() {
         let store = TaskStore::new();
         store
-            .create("T1".to_string(), ActionType::Reminder, "{}".to_string(), None, None, None)
+            .create(
+                "T1".to_string(),
+                ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
         store
-            .create("T2".to_string(), ActionType::Clipboard, "{}".to_string(), None, None, None)
+            .create(
+                "T2".to_string(),
+                ActionType::Clipboard,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
 
         let all = store.list(None, None, None);
@@ -302,10 +319,24 @@ mod tests {
     fn test_list_filter_by_status() {
         let store = TaskStore::new();
         let task = store
-            .create("T1".to_string(), ActionType::Reminder, "{}".to_string(), None, None, None)
+            .create(
+                "T1".to_string(),
+                ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
         store
-            .create("T2".to_string(), ActionType::Clipboard, "{}".to_string(), None, None, None)
+            .create(
+                "T2".to_string(),
+                ActionType::Clipboard,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
 
         // Move T1 to Pending
@@ -324,10 +355,24 @@ mod tests {
     fn test_list_filter_by_action_type() {
         let store = TaskStore::new();
         store
-            .create("T1".to_string(), ActionType::Reminder, "{}".to_string(), None, None, None)
+            .create(
+                "T1".to_string(),
+                ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
         store
-            .create("T2".to_string(), ActionType::Clipboard, "{}".to_string(), None, None, None)
+            .create(
+                "T2".to_string(),
+                ActionType::Clipboard,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
 
         let reminders = store.list(None, Some(ActionType::Reminder), None);
@@ -359,7 +404,14 @@ mod tests {
     fn test_dismiss_task() {
         let store = TaskStore::new();
         let task = store
-            .create("Test".to_string(), ActionType::Reminder, "{}".to_string(), None, None, None)
+            .create(
+                "Test".to_string(),
+                ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
 
         // Detected -> Pending first
@@ -374,7 +426,14 @@ mod tests {
     fn test_dismiss_from_detected_fails() {
         let store = TaskStore::new();
         let task = store
-            .create("Test".to_string(), ActionType::Reminder, "{}".to_string(), None, None, None)
+            .create(
+                "Test".to_string(),
+                ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
 
         // Cannot dismiss from Detected (only Pending)
@@ -388,7 +447,14 @@ mod tests {
 
         // Create a task and manually set old created_at
         let task = store
-            .create("Old task".to_string(), ActionType::Reminder, "{}".to_string(), None, None, None)
+            .create(
+                "Old task".to_string(),
+                ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
 
         // Move to Pending (expirable state)
@@ -414,7 +480,14 @@ mod tests {
     fn test_expire_stale_tasks_skips_recent() {
         let store = TaskStore::new();
         let task = store
-            .create("New task".to_string(), ActionType::Reminder, "{}".to_string(), None, None, None)
+            .create(
+                "New task".to_string(),
+                ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
         store.update_status(task.id, TaskStatus::Pending).unwrap();
 
@@ -427,7 +500,14 @@ mod tests {
     fn test_expire_stale_tasks_skips_terminal_states() {
         let store = TaskStore::new();
         let task = store
-            .create("Done task".to_string(), ActionType::Reminder, "{}".to_string(), None, None, None)
+            .create(
+                "Done task".to_string(),
+                ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
         store.update_status(task.id, TaskStatus::Pending).unwrap();
         store.update_status(task.id, TaskStatus::Active).unwrap();
@@ -448,7 +528,14 @@ mod tests {
     fn test_expire_active_tasks() {
         let store = TaskStore::new();
         let task = store
-            .create("Active old".to_string(), ActionType::Reminder, "{}".to_string(), None, None, None)
+            .create(
+                "Active old".to_string(),
+                ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
         store.update_status(task.id, TaskStatus::Pending).unwrap();
         store.update_status(task.id, TaskStatus::Active).unwrap();

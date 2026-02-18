@@ -1109,6 +1109,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
+ "engram-action",
  "engram-core",
  "engram-dictation",
  "engram-insight",
@@ -1136,6 +1137,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "engram-action",
  "engram-api",
  "engram-audio",
  "engram-capture",

@@ -230,7 +230,9 @@ mod tests {
 
     #[test]
     fn test_can_always_allow_shell_command_is_false() {
-        assert!(!ConfirmationGate::can_always_allow(ActionType::ShellCommand));
+        assert!(!ConfirmationGate::can_always_allow(
+            ActionType::ShellCommand
+        ));
     }
 
     // ---- NotificationRateLimiter tests ----

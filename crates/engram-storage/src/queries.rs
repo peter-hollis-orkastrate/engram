@@ -632,6 +632,156 @@ impl QueryService {
         })
     }
 
+    // =========================================================================
+    // Action Engine Query Methods (on QueryService)
+    // =========================================================================
+
+    /// Get action history as JSON values with optional filters.
+    pub fn get_action_history(
+        &self,
+        action_type: Option<&str>,
+        since: Option<&str>,
+        limit: Option<u64>,
+    ) -> Result<Vec<serde_json::Value>, EngramError> {
+        self.db.with_conn(|conn| {
+            let limit_val = limit.unwrap_or(50).min(200) as i64;
+            let mut conditions = Vec::new();
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            let mut idx = 1;
+
+            if let Some(at) = action_type {
+                conditions.push(format!("action_type = ?{}", idx));
+                params.push(Box::new(at.to_string()));
+                idx += 1;
+            }
+            if let Some(s) = since {
+                conditions.push(format!("executed_at > ?{}", idx));
+                params.push(Box::new(s.to_string()));
+                idx += 1;
+            }
+
+            let where_clause = if conditions.is_empty() {
+                String::new()
+            } else {
+                format!("WHERE {}", conditions.join(" AND "))
+            };
+
+            let sql = format!(
+                "SELECT id, task_id, action_type, result, error_message, executed_at
+                 FROM action_history {} ORDER BY executed_at DESC LIMIT ?{}",
+                where_clause, idx
+            );
+            params.push(Box::new(limit_val));
+
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| EngramError::Storage(format!("Get action history prepare: {}", e)))?;
+
+            let rows = stmt
+                .query_map(params_refs.as_slice(), |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "task_id": row.get::<_, String>(1)?,
+                        "action_type": row.get::<_, String>(2)?,
+                        "result": row.get::<_, String>(3)?,
+                        "error_message": row.get::<_, Option<String>>(4)?,
+                        "executed_at": row.get::<_, String>(5)?,
+                    }))
+                })
+                .map_err(|e| EngramError::Storage(format!("Get action history: {}", e)))?;
+
+            let mut results = Vec::new();
+            for v in rows.flatten() {
+                results.push(v);
+            }
+            Ok(results)
+        })
+    }
+
+    /// Get intents as JSON values with optional filters.
+    pub fn get_intents_json(
+        &self,
+        intent_type: Option<&str>,
+        min_confidence: Option<f64>,
+        limit: Option<u64>,
+        since: Option<&str>,
+        acted_on: Option<bool>,
+    ) -> Result<Vec<serde_json::Value>, EngramError> {
+        self.db.with_conn(|conn| {
+            let limit_val = limit.unwrap_or(50).min(200) as i64;
+            let mut conditions = Vec::new();
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            let mut idx = 1;
+
+            if let Some(it) = intent_type {
+                conditions.push(format!("intent_type = ?{}", idx));
+                params.push(Box::new(it.to_string()));
+                idx += 1;
+            }
+            if let Some(mc) = min_confidence {
+                conditions.push(format!("confidence >= ?{}", idx));
+                params.push(Box::new(mc));
+                idx += 1;
+            }
+            if let Some(s) = since {
+                conditions.push(format!("detected_at > ?{}", idx));
+                params.push(Box::new(s.to_string()));
+                idx += 1;
+            }
+            if let Some(ao) = acted_on {
+                conditions.push(format!("acted_on = ?{}", idx));
+                params.push(Box::new(ao as i32));
+                idx += 1;
+            }
+
+            let where_clause = if conditions.is_empty() {
+                String::new()
+            } else {
+                format!("WHERE {}", conditions.join(" AND "))
+            };
+
+            let sql = format!(
+                "SELECT id, intent_type, raw_text, extracted_action, extracted_time, confidence, source_chunk_id, detected_at, acted_on
+                 FROM intents {} ORDER BY detected_at DESC LIMIT ?{}",
+                where_clause, idx
+            );
+            params.push(Box::new(limit_val));
+
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| EngramError::Storage(format!("Get intents json prepare: {}", e)))?;
+
+            let rows = stmt
+                .query_map(params_refs.as_slice(), |row| {
+                    let acted_on_val: i32 = row.get(8)?;
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "intent_type": row.get::<_, String>(1)?,
+                        "raw_text": row.get::<_, String>(2)?,
+                        "extracted_action": row.get::<_, String>(3)?,
+                        "extracted_time": row.get::<_, Option<String>>(4)?,
+                        "confidence": row.get::<_, f64>(5)?,
+                        "source_chunk_id": row.get::<_, Option<String>>(6)?,
+                        "detected_at": row.get::<_, String>(7)?,
+                        "acted_on": acted_on_val != 0,
+                    }))
+                })
+                .map_err(|e| EngramError::Storage(format!("Get intents json: {}", e)))?;
+
+            let mut results = Vec::new();
+            for v in rows.flatten() {
+                results.push(v);
+            }
+            Ok(results)
+        })
+    }
+
     /// Get capture rows since a given epoch-second timestamp.
     pub fn get_chunks_since(&self, since_epoch: i64) -> Result<Vec<CaptureRow>, EngramError> {
         self.db.with_conn(|conn| {
@@ -738,10 +888,7 @@ pub struct HistoryFilters {
 // =============================================================================
 
 /// Store an intent row.
-pub fn store_intent(
-    conn: &rusqlite::Connection,
-    intent: &IntentRow,
-) -> Result<(), EngramError> {
+pub fn store_intent(conn: &rusqlite::Connection, intent: &IntentRow) -> Result<(), EngramError> {
     conn.execute(
         "INSERT INTO intents (id, intent_type, raw_text, extracted_action, extracted_time, confidence, source_chunk_id, detected_at, acted_on)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -800,8 +947,7 @@ pub fn get_intents(
     );
     params.push(Box::new(limit_val));
 
-    let params_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params.iter().map(|p| p.as_ref()).collect();
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     let mut stmt = conn
         .prepare(&sql)
@@ -832,10 +978,7 @@ pub fn get_intents(
 }
 
 /// Store a task row.
-pub fn store_task(
-    conn: &rusqlite::Connection,
-    task: &TaskRow,
-) -> Result<(), EngramError> {
+pub fn store_task(conn: &rusqlite::Connection, task: &TaskRow) -> Result<(), EngramError> {
     conn.execute(
         "INSERT INTO tasks (id, title, status, intent_id, action_type, action_payload, scheduled_at, completed_at, created_at, source_chunk_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -857,10 +1000,7 @@ pub fn store_task(
 }
 
 /// Get a single task by ID.
-pub fn get_task(
-    conn: &rusqlite::Connection,
-    id: &str,
-) -> Result<Option<TaskRow>, EngramError> {
+pub fn get_task(conn: &rusqlite::Connection, id: &str) -> Result<Option<TaskRow>, EngramError> {
     let mut stmt = conn
         .prepare(
             "SELECT id, title, status, intent_id, action_type, action_payload, scheduled_at, completed_at, created_at, source_chunk_id
@@ -942,8 +1082,7 @@ pub fn list_tasks(
     );
     params.push(Box::new(limit_val));
 
-    let params_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params.iter().map(|p| p.as_ref()).collect();
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     let mut stmt = conn
         .prepare(&sql)
@@ -1028,8 +1167,7 @@ pub fn get_action_history(
     );
     params.push(Box::new(limit_val));
 
-    let params_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params.iter().map(|p| p.as_ref()).collect();
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     let mut stmt = conn
         .prepare(&sql)
@@ -1500,34 +1638,46 @@ mod tests {
     #[test]
     fn test_get_intents_filtered_by_type() {
         let conn = make_conn();
-        store_intent(&conn, &IntentRow {
-            id: "int-a".to_string(),
-            intent_type: "reminder".to_string(),
-            raw_text: "remind".to_string(),
-            extracted_action: "call".to_string(),
-            extracted_time: None,
-            confidence: 0.9,
-            source_chunk_id: "c1".to_string(),
-            detected_at: "2026-02-18T10:00:00".to_string(),
-            acted_on: false,
-        }).unwrap();
+        store_intent(
+            &conn,
+            &IntentRow {
+                id: "int-a".to_string(),
+                intent_type: "reminder".to_string(),
+                raw_text: "remind".to_string(),
+                extracted_action: "call".to_string(),
+                extracted_time: None,
+                confidence: 0.9,
+                source_chunk_id: "c1".to_string(),
+                detected_at: "2026-02-18T10:00:00".to_string(),
+                acted_on: false,
+            },
+        )
+        .unwrap();
 
-        store_intent(&conn, &IntentRow {
-            id: "int-b".to_string(),
-            intent_type: "task".to_string(),
-            raw_text: "TODO: fix".to_string(),
-            extracted_action: "fix".to_string(),
-            extracted_time: None,
-            confidence: 0.95,
-            source_chunk_id: "c2".to_string(),
-            detected_at: "2026-02-18T11:00:00".to_string(),
-            acted_on: false,
-        }).unwrap();
+        store_intent(
+            &conn,
+            &IntentRow {
+                id: "int-b".to_string(),
+                intent_type: "task".to_string(),
+                raw_text: "TODO: fix".to_string(),
+                extracted_action: "fix".to_string(),
+                extracted_time: None,
+                confidence: 0.95,
+                source_chunk_id: "c2".to_string(),
+                detected_at: "2026-02-18T11:00:00".to_string(),
+                acted_on: false,
+            },
+        )
+        .unwrap();
 
-        let reminders = get_intents(&conn, &IntentFilters {
-            intent_type: Some("reminder".to_string()),
-            ..Default::default()
-        }).unwrap();
+        let reminders = get_intents(
+            &conn,
+            &IntentFilters {
+                intent_type: Some("reminder".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(reminders.len(), 1);
         assert_eq!(reminders[0].id, "int-a");
     }
@@ -1535,34 +1685,46 @@ mod tests {
     #[test]
     fn test_get_intents_filtered_by_confidence() {
         let conn = make_conn();
-        store_intent(&conn, &IntentRow {
-            id: "int-lo".to_string(),
-            intent_type: "task".to_string(),
-            raw_text: "need to".to_string(),
-            extracted_action: "do".to_string(),
-            extracted_time: None,
-            confidence: 0.5,
-            source_chunk_id: "c1".to_string(),
-            detected_at: "2026-02-18T10:00:00".to_string(),
-            acted_on: false,
-        }).unwrap();
+        store_intent(
+            &conn,
+            &IntentRow {
+                id: "int-lo".to_string(),
+                intent_type: "task".to_string(),
+                raw_text: "need to".to_string(),
+                extracted_action: "do".to_string(),
+                extracted_time: None,
+                confidence: 0.5,
+                source_chunk_id: "c1".to_string(),
+                detected_at: "2026-02-18T10:00:00".to_string(),
+                acted_on: false,
+            },
+        )
+        .unwrap();
 
-        store_intent(&conn, &IntentRow {
-            id: "int-hi".to_string(),
-            intent_type: "task".to_string(),
-            raw_text: "TODO:".to_string(),
-            extracted_action: "fix".to_string(),
-            extracted_time: None,
-            confidence: 0.95,
-            source_chunk_id: "c2".to_string(),
-            detected_at: "2026-02-18T11:00:00".to_string(),
-            acted_on: false,
-        }).unwrap();
+        store_intent(
+            &conn,
+            &IntentRow {
+                id: "int-hi".to_string(),
+                intent_type: "task".to_string(),
+                raw_text: "TODO:".to_string(),
+                extracted_action: "fix".to_string(),
+                extracted_time: None,
+                confidence: 0.95,
+                source_chunk_id: "c2".to_string(),
+                detected_at: "2026-02-18T11:00:00".to_string(),
+                acted_on: false,
+            },
+        )
+        .unwrap();
 
-        let high = get_intents(&conn, &IntentFilters {
-            min_confidence: Some(0.8),
-            ..Default::default()
-        }).unwrap();
+        let high = get_intents(
+            &conn,
+            &IntentFilters {
+                min_confidence: Some(0.8),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(high.len(), 1);
         assert_eq!(high[0].id, "int-hi");
     }
@@ -1602,18 +1764,22 @@ mod tests {
     #[test]
     fn test_update_task_status_fn() {
         let conn = make_conn();
-        store_task(&conn, &TaskRow {
-            id: "task-upd".to_string(),
-            title: "Test".to_string(),
-            status: "pending".to_string(),
-            intent_id: None,
-            action_type: "reminder".to_string(),
-            action_payload: "{}".to_string(),
-            scheduled_at: None,
-            completed_at: None,
-            created_at: "2026-02-18T10:00:00".to_string(),
-            source_chunk_id: None,
-        }).unwrap();
+        store_task(
+            &conn,
+            &TaskRow {
+                id: "task-upd".to_string(),
+                title: "Test".to_string(),
+                status: "pending".to_string(),
+                intent_id: None,
+                action_type: "reminder".to_string(),
+                action_payload: "{}".to_string(),
+                scheduled_at: None,
+                completed_at: None,
+                created_at: "2026-02-18T10:00:00".to_string(),
+                source_chunk_id: None,
+            },
+        )
+        .unwrap();
 
         let updated = update_task_status(&conn, "task-upd", "active", None).unwrap();
         assert!(updated);
@@ -1625,18 +1791,22 @@ mod tests {
     #[test]
     fn test_update_task_status_with_completed_at() {
         let conn = make_conn();
-        store_task(&conn, &TaskRow {
-            id: "task-done".to_string(),
-            title: "Done".to_string(),
-            status: "active".to_string(),
-            intent_id: None,
-            action_type: "reminder".to_string(),
-            action_payload: "{}".to_string(),
-            scheduled_at: None,
-            completed_at: None,
-            created_at: "2026-02-18T10:00:00".to_string(),
-            source_chunk_id: None,
-        }).unwrap();
+        store_task(
+            &conn,
+            &TaskRow {
+                id: "task-done".to_string(),
+                title: "Done".to_string(),
+                status: "active".to_string(),
+                intent_id: None,
+                action_type: "reminder".to_string(),
+                action_payload: "{}".to_string(),
+                scheduled_at: None,
+                completed_at: None,
+                created_at: "2026-02-18T10:00:00".to_string(),
+                source_chunk_id: None,
+            },
+        )
+        .unwrap();
 
         update_task_status(&conn, "task-done", "done", Some("2026-02-18T17:00:00")).unwrap();
 
@@ -1655,30 +1825,38 @@ mod tests {
     #[test]
     fn test_list_tasks_all() {
         let conn = make_conn();
-        store_task(&conn, &TaskRow {
-            id: "t1".to_string(),
-            title: "T1".to_string(),
-            status: "pending".to_string(),
-            intent_id: None,
-            action_type: "reminder".to_string(),
-            action_payload: "{}".to_string(),
-            scheduled_at: None,
-            completed_at: None,
-            created_at: "2026-02-18T10:00:00".to_string(),
-            source_chunk_id: None,
-        }).unwrap();
-        store_task(&conn, &TaskRow {
-            id: "t2".to_string(),
-            title: "T2".to_string(),
-            status: "active".to_string(),
-            intent_id: None,
-            action_type: "clipboard".to_string(),
-            action_payload: "{}".to_string(),
-            scheduled_at: None,
-            completed_at: None,
-            created_at: "2026-02-18T11:00:00".to_string(),
-            source_chunk_id: None,
-        }).unwrap();
+        store_task(
+            &conn,
+            &TaskRow {
+                id: "t1".to_string(),
+                title: "T1".to_string(),
+                status: "pending".to_string(),
+                intent_id: None,
+                action_type: "reminder".to_string(),
+                action_payload: "{}".to_string(),
+                scheduled_at: None,
+                completed_at: None,
+                created_at: "2026-02-18T10:00:00".to_string(),
+                source_chunk_id: None,
+            },
+        )
+        .unwrap();
+        store_task(
+            &conn,
+            &TaskRow {
+                id: "t2".to_string(),
+                title: "T2".to_string(),
+                status: "active".to_string(),
+                intent_id: None,
+                action_type: "clipboard".to_string(),
+                action_payload: "{}".to_string(),
+                scheduled_at: None,
+                completed_at: None,
+                created_at: "2026-02-18T11:00:00".to_string(),
+                source_chunk_id: None,
+            },
+        )
+        .unwrap();
 
         let all = list_tasks(&conn, &TaskFilters::default()).unwrap();
         assert_eq!(all.len(), 2);
@@ -1687,35 +1865,47 @@ mod tests {
     #[test]
     fn test_list_tasks_filtered() {
         let conn = make_conn();
-        store_task(&conn, &TaskRow {
-            id: "tf1".to_string(),
-            title: "F1".to_string(),
-            status: "pending".to_string(),
-            intent_id: None,
-            action_type: "reminder".to_string(),
-            action_payload: "{}".to_string(),
-            scheduled_at: None,
-            completed_at: None,
-            created_at: "2026-02-18T10:00:00".to_string(),
-            source_chunk_id: None,
-        }).unwrap();
-        store_task(&conn, &TaskRow {
-            id: "tf2".to_string(),
-            title: "F2".to_string(),
-            status: "active".to_string(),
-            intent_id: None,
-            action_type: "reminder".to_string(),
-            action_payload: "{}".to_string(),
-            scheduled_at: None,
-            completed_at: None,
-            created_at: "2026-02-18T11:00:00".to_string(),
-            source_chunk_id: None,
-        }).unwrap();
+        store_task(
+            &conn,
+            &TaskRow {
+                id: "tf1".to_string(),
+                title: "F1".to_string(),
+                status: "pending".to_string(),
+                intent_id: None,
+                action_type: "reminder".to_string(),
+                action_payload: "{}".to_string(),
+                scheduled_at: None,
+                completed_at: None,
+                created_at: "2026-02-18T10:00:00".to_string(),
+                source_chunk_id: None,
+            },
+        )
+        .unwrap();
+        store_task(
+            &conn,
+            &TaskRow {
+                id: "tf2".to_string(),
+                title: "F2".to_string(),
+                status: "active".to_string(),
+                intent_id: None,
+                action_type: "reminder".to_string(),
+                action_payload: "{}".to_string(),
+                scheduled_at: None,
+                completed_at: None,
+                created_at: "2026-02-18T11:00:00".to_string(),
+                source_chunk_id: None,
+            },
+        )
+        .unwrap();
 
-        let pending = list_tasks(&conn, &TaskFilters {
-            status: Some("pending".to_string()),
-            ..Default::default()
-        }).unwrap();
+        let pending = list_tasks(
+            &conn,
+            &TaskFilters {
+                status: Some("pending".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].id, "tf1");
     }
@@ -1725,27 +1915,35 @@ mod tests {
         let conn = make_conn();
 
         // Create task first for FK
-        store_task(&conn, &TaskRow {
-            id: "task-hist".to_string(),
-            title: "History".to_string(),
-            status: "active".to_string(),
-            intent_id: None,
-            action_type: "notification".to_string(),
-            action_payload: "{}".to_string(),
-            scheduled_at: None,
-            completed_at: None,
-            created_at: "2026-02-18T10:00:00".to_string(),
-            source_chunk_id: None,
-        }).unwrap();
+        store_task(
+            &conn,
+            &TaskRow {
+                id: "task-hist".to_string(),
+                title: "History".to_string(),
+                status: "active".to_string(),
+                intent_id: None,
+                action_type: "notification".to_string(),
+                action_payload: "{}".to_string(),
+                scheduled_at: None,
+                completed_at: None,
+                created_at: "2026-02-18T10:00:00".to_string(),
+                source_chunk_id: None,
+            },
+        )
+        .unwrap();
 
-        store_action_history(&conn, &ActionHistoryRow {
-            id: "ah-100".to_string(),
-            task_id: "task-hist".to_string(),
-            action_type: "notification".to_string(),
-            result: "success".to_string(),
-            error_message: None,
-            executed_at: "2026-02-18T10:05:00".to_string(),
-        }).unwrap();
+        store_action_history(
+            &conn,
+            &ActionHistoryRow {
+                id: "ah-100".to_string(),
+                task_id: "task-hist".to_string(),
+                action_type: "notification".to_string(),
+                result: "success".to_string(),
+                error_message: None,
+                executed_at: "2026-02-18T10:05:00".to_string(),
+            },
+        )
+        .unwrap();
 
         let history = get_action_history(&conn, &HistoryFilters::default()).unwrap();
         assert_eq!(history.len(), 1);
@@ -1758,52 +1956,72 @@ mod tests {
     fn test_get_action_history_filtered_by_task() {
         let conn = make_conn();
 
-        store_task(&conn, &TaskRow {
-            id: "t-a".to_string(),
-            title: "A".to_string(),
-            status: "active".to_string(),
-            intent_id: None,
-            action_type: "reminder".to_string(),
-            action_payload: "{}".to_string(),
-            scheduled_at: None,
-            completed_at: None,
-            created_at: "2026-02-18T10:00:00".to_string(),
-            source_chunk_id: None,
-        }).unwrap();
-        store_task(&conn, &TaskRow {
-            id: "t-b".to_string(),
-            title: "B".to_string(),
-            status: "active".to_string(),
-            intent_id: None,
-            action_type: "reminder".to_string(),
-            action_payload: "{}".to_string(),
-            scheduled_at: None,
-            completed_at: None,
-            created_at: "2026-02-18T11:00:00".to_string(),
-            source_chunk_id: None,
-        }).unwrap();
+        store_task(
+            &conn,
+            &TaskRow {
+                id: "t-a".to_string(),
+                title: "A".to_string(),
+                status: "active".to_string(),
+                intent_id: None,
+                action_type: "reminder".to_string(),
+                action_payload: "{}".to_string(),
+                scheduled_at: None,
+                completed_at: None,
+                created_at: "2026-02-18T10:00:00".to_string(),
+                source_chunk_id: None,
+            },
+        )
+        .unwrap();
+        store_task(
+            &conn,
+            &TaskRow {
+                id: "t-b".to_string(),
+                title: "B".to_string(),
+                status: "active".to_string(),
+                intent_id: None,
+                action_type: "reminder".to_string(),
+                action_payload: "{}".to_string(),
+                scheduled_at: None,
+                completed_at: None,
+                created_at: "2026-02-18T11:00:00".to_string(),
+                source_chunk_id: None,
+            },
+        )
+        .unwrap();
 
-        store_action_history(&conn, &ActionHistoryRow {
-            id: "ah-a".to_string(),
-            task_id: "t-a".to_string(),
-            action_type: "reminder".to_string(),
-            result: "ok".to_string(),
-            error_message: None,
-            executed_at: "2026-02-18T10:05:00".to_string(),
-        }).unwrap();
-        store_action_history(&conn, &ActionHistoryRow {
-            id: "ah-b".to_string(),
-            task_id: "t-b".to_string(),
-            action_type: "reminder".to_string(),
-            result: "ok".to_string(),
-            error_message: None,
-            executed_at: "2026-02-18T11:05:00".to_string(),
-        }).unwrap();
+        store_action_history(
+            &conn,
+            &ActionHistoryRow {
+                id: "ah-a".to_string(),
+                task_id: "t-a".to_string(),
+                action_type: "reminder".to_string(),
+                result: "ok".to_string(),
+                error_message: None,
+                executed_at: "2026-02-18T10:05:00".to_string(),
+            },
+        )
+        .unwrap();
+        store_action_history(
+            &conn,
+            &ActionHistoryRow {
+                id: "ah-b".to_string(),
+                task_id: "t-b".to_string(),
+                action_type: "reminder".to_string(),
+                result: "ok".to_string(),
+                error_message: None,
+                executed_at: "2026-02-18T11:05:00".to_string(),
+            },
+        )
+        .unwrap();
 
-        let for_a = get_action_history(&conn, &HistoryFilters {
-            task_id: Some("t-a".to_string()),
-            ..Default::default()
-        }).unwrap();
+        let for_a = get_action_history(
+            &conn,
+            &HistoryFilters {
+                task_id: Some("t-a".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(for_a.len(), 1);
         assert_eq!(for_a[0].task_id, "t-a");
     }
@@ -1812,29 +2030,278 @@ mod tests {
     fn test_action_history_with_error() {
         let conn = make_conn();
 
-        store_task(&conn, &TaskRow {
-            id: "task-err2".to_string(),
-            title: "Err".to_string(),
-            status: "active".to_string(),
-            intent_id: None,
-            action_type: "shell_command".to_string(),
-            action_payload: "{}".to_string(),
-            scheduled_at: None,
-            completed_at: None,
-            created_at: "2026-02-18T10:00:00".to_string(),
-            source_chunk_id: None,
-        }).unwrap();
+        store_task(
+            &conn,
+            &TaskRow {
+                id: "task-err2".to_string(),
+                title: "Err".to_string(),
+                status: "active".to_string(),
+                intent_id: None,
+                action_type: "shell_command".to_string(),
+                action_payload: "{}".to_string(),
+                scheduled_at: None,
+                completed_at: None,
+                created_at: "2026-02-18T10:00:00".to_string(),
+                source_chunk_id: None,
+            },
+        )
+        .unwrap();
 
-        store_action_history(&conn, &ActionHistoryRow {
-            id: "ah-err2".to_string(),
-            task_id: "task-err2".to_string(),
-            action_type: "shell_command".to_string(),
-            result: "failed".to_string(),
-            error_message: Some("permission denied".to_string()),
-            executed_at: "2026-02-18T10:05:00".to_string(),
-        }).unwrap();
+        store_action_history(
+            &conn,
+            &ActionHistoryRow {
+                id: "ah-err2".to_string(),
+                task_id: "task-err2".to_string(),
+                action_type: "shell_command".to_string(),
+                result: "failed".to_string(),
+                error_message: Some("permission denied".to_string()),
+                executed_at: "2026-02-18T10:05:00".to_string(),
+            },
+        )
+        .unwrap();
 
         let history = get_action_history(&conn, &HistoryFilters::default()).unwrap();
-        assert_eq!(history[0].error_message, Some("permission denied".to_string()));
+        assert_eq!(
+            history[0].error_message,
+            Some("permission denied".to_string())
+        );
+    }
+
+    // =========================================================================
+    // QueryService Action Engine Method Tests
+    // =========================================================================
+
+    #[test]
+    fn test_qs_get_action_history_empty() {
+        let db = make_db();
+        let qs = QueryService::new(db);
+        let results = qs.get_action_history(None, None, None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_qs_get_action_history_with_data() {
+        let db = make_db();
+        // Insert test data via raw conn
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO tasks (id, title, status, action_type, action_payload, created_at)
+                 VALUES ('t-ah1', 'Test', 'active', 'reminder', '{}', '2026-02-18T10:00:00')",
+                [],
+            ).map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO action_history (id, task_id, action_type, result, error_message, executed_at)
+                 VALUES ('ah-qs1', 't-ah1', 'reminder', 'success', NULL, '2026-02-18T10:05:00')",
+                [],
+            ).map_err(|e| EngramError::Storage(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+        let qs = QueryService::new(db);
+        let results = qs.get_action_history(None, None, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["action_type"], "reminder");
+        assert_eq!(results[0]["result"], "success");
+    }
+
+    #[test]
+    fn test_qs_get_action_history_filtered() {
+        let db = make_db();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO tasks (id, title, status, action_type, action_payload, created_at)
+                 VALUES ('t-ahf1', 'T1', 'active', 'reminder', '{}', '2026-02-18T10:00:00')",
+                [],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO tasks (id, title, status, action_type, action_payload, created_at)
+                 VALUES ('t-ahf2', 'T2', 'active', 'clipboard', '{}', '2026-02-18T10:00:00')",
+                [],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO action_history (id, task_id, action_type, result, executed_at)
+                 VALUES ('ah-f1', 't-ahf1', 'reminder', 'ok', '2026-02-18T10:05:00')",
+                [],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO action_history (id, task_id, action_type, result, executed_at)
+                 VALUES ('ah-f2', 't-ahf2', 'clipboard', 'ok', '2026-02-18T11:05:00')",
+                [],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+
+        let qs = QueryService::new(db);
+        let results = qs.get_action_history(Some("reminder"), None, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["task_id"], "t-ahf1");
+    }
+
+    #[test]
+    fn test_qs_get_action_history_with_limit() {
+        let db = make_db();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO tasks (id, title, status, action_type, action_payload, created_at)
+                 VALUES ('t-lim', 'Lim', 'active', 'reminder', '{}', '2026-02-18T10:00:00')",
+                [],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            for i in 0..5 {
+                conn.execute(
+                    &format!(
+                        "INSERT INTO action_history (id, task_id, action_type, result, executed_at)
+                         VALUES ('ah-lim-{}', 't-lim', 'reminder', 'ok', '2026-02-18T10:{:02}:00')",
+                        i, i
+                    ),
+                    [],
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        let qs = QueryService::new(db);
+        let results = qs.get_action_history(None, None, Some(2)).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_qs_get_intents_json_empty() {
+        let db = make_db();
+        let qs = QueryService::new(db);
+        let results = qs.get_intents_json(None, None, None, None, None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_qs_get_intents_json_with_data() {
+        let db = make_db();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO intents (id, intent_type, raw_text, extracted_action, extracted_time, confidence, source_chunk_id, detected_at, acted_on)
+                 VALUES ('int-qs1', 'reminder', 'remind me', 'remind', '2026-02-18T15:00:00', 0.92, 'chunk-1', '2026-02-18T10:00:00', 0)",
+                [],
+            ).map_err(|e| EngramError::Storage(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+        let qs = QueryService::new(db);
+        let results = qs.get_intents_json(None, None, None, None, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["intent_type"], "reminder");
+        assert_eq!(results[0]["confidence"], 0.92);
+        assert_eq!(results[0]["acted_on"], false);
+    }
+
+    #[test]
+    fn test_qs_get_intents_json_filtered_by_type() {
+        let db = make_db();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at, acted_on)
+                 VALUES ('int-ft1', 'reminder', 'remind', 'r', 0.9, 'c1', '2026-02-18T10:00:00', 0)",
+                [],
+            ).map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at, acted_on)
+                 VALUES ('int-ft2', 'task', 'todo', 't', 0.95, 'c2', '2026-02-18T11:00:00', 0)",
+                [],
+            ).map_err(|e| EngramError::Storage(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+        let qs = QueryService::new(db);
+        let results = qs
+            .get_intents_json(Some("reminder"), None, None, None, None)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["id"], "int-ft1");
+    }
+
+    #[test]
+    fn test_qs_get_intents_json_filtered_by_confidence() {
+        let db = make_db();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at, acted_on)
+                 VALUES ('int-mc1', 'task', 'lo', 'a', 0.5, 'c1', '2026-02-18T10:00:00', 0)",
+                [],
+            ).map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at, acted_on)
+                 VALUES ('int-mc2', 'task', 'hi', 'b', 0.95, 'c2', '2026-02-18T11:00:00', 0)",
+                [],
+            ).map_err(|e| EngramError::Storage(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+        let qs = QueryService::new(db);
+        let results = qs
+            .get_intents_json(None, Some(0.8), None, None, None)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["id"], "int-mc2");
+    }
+
+    #[test]
+    fn test_qs_get_intents_json_filtered_by_acted_on() {
+        let db = make_db();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at, acted_on)
+                 VALUES ('int-ao1', 'task', 'a', 'a', 0.9, 'c1', '2026-02-18T10:00:00', 0)",
+                [],
+            ).map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at, acted_on)
+                 VALUES ('int-ao2', 'task', 'b', 'b', 0.9, 'c2', '2026-02-18T11:00:00', 1)",
+                [],
+            ).map_err(|e| EngramError::Storage(e.to_string()))?;
+            Ok(())
+        }).unwrap();
+
+        let qs = QueryService::new(db);
+        let not_acted = qs
+            .get_intents_json(None, None, None, None, Some(false))
+            .unwrap();
+        assert_eq!(not_acted.len(), 1);
+        assert_eq!(not_acted[0]["id"], "int-ao1");
+
+        let acted = qs
+            .get_intents_json(None, None, None, None, Some(true))
+            .unwrap();
+        assert_eq!(acted.len(), 1);
+        assert_eq!(acted[0]["id"], "int-ao2");
+    }
+
+    #[test]
+    fn test_qs_get_intents_json_with_limit() {
+        let db = make_db();
+        db.with_conn(|conn| {
+            for i in 0..5 {
+                conn.execute(
+                    &format!(
+                        "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at, acted_on)
+                         VALUES ('int-lim-{}', 'task', 't{}', 'a', 0.9, 'c', '2026-02-18T{}:00:00', 0)",
+                        i, i, 10 + i
+                    ),
+                    [],
+                ).map_err(|e| EngramError::Storage(e.to_string()))?;
+            }
+            Ok(())
+        }).unwrap();
+
+        let qs = QueryService::new(db);
+        let results = qs
+            .get_intents_json(None, None, Some(2), None, None)
+            .unwrap();
+        assert_eq!(results.len(), 2);
     }
 }

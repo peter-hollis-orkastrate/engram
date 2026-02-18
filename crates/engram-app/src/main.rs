@@ -568,6 +568,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_api_token(api_token)
     .with_shared_state(Arc::clone(&audio_active), Arc::clone(&dictation_engine));
 
+    // === Action Engine ===
+    let action_config = engram_action::ActionConfig::default();
+    let action_task_store = Arc::new(engram_action::TaskStore::new());
+    let action_confirmation_gate =
+        Arc::new(engram_action::ConfirmationGate::new(action_config.clone()));
+    let mut action_registry = engram_action::ActionRegistry::new();
+    action_registry.register_defaults();
+    let action_orchestrator = Arc::new(engram_action::Orchestrator::new(
+        action_registry,
+        Arc::clone(&action_task_store),
+        action_config.clone(),
+    ));
+
+    let state = state.with_action_engine(
+        Arc::clone(&action_task_store),
+        Arc::clone(&action_confirmation_gate),
+        Arc::clone(&action_orchestrator),
+        action_config.clone(),
+    );
+
+    // Intent detector (available for production event-bus subscription)
+    let _intent_detector = engram_action::intent::IntentDetector::new(action_config.clone());
+
+    // Scheduler background task
+    if action_config.enabled {
+        let scheduler_store = Arc::clone(&action_task_store);
+        let scheduler = engram_action::Scheduler::new(scheduler_store);
+        tokio::spawn(async move {
+            scheduler.run().await;
+        });
+        tracing::info!("Action engine started (scheduler + orchestrator)");
+    } else {
+        tracing::info!("Action engine disabled in config");
+    }
+
     // === System Tray ===
     let _tray = if !cli_args.headless {
         match engram_ui::tray::TrayService::new() {

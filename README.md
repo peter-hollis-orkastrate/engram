@@ -124,9 +124,11 @@ Config file at `~/.engram/config.toml` (auto-created on install). Priority: CLI 
 |-------|-------|
 | **Phase 5: Local Action Engine** | Automated actions triggered by captured context, local command execution |
 | **Phase 6: Conversational Interface** | Natural language queries over your memory, chat-based interaction |
-| **Phase 7: Workflow Automation & Integration** | Third-party app integration, automated workflows triggered by context |
-| **Phase 8: Ambient Intelligence & Proactive Assistant** | Proactive suggestions, context-aware notifications, anticipatory assistance |
-| **Phase 9: Cross-Device Sync (Privacy-Preserving)** | Encrypted sync across devices, federated search, zero-knowledge architecture |
+| **Phase 7: General Tidy-Up #1** | General codebase tidy-up and cleanup |
+| **Phase 8: Workflow Automation & Integration** | Local tool integration, automated workflows triggered by context |
+| **Phase 9: Ambient Intelligence & Proactive Assistant** | Proactive suggestions, context-aware notifications, anticipatory assistance |
+| **Phase 10: General Tidy-Up #2** | General codebase tidy-up and cleanup |
+| **Phase 11: LAN Mode — Local Network Ingest** | One-way ingest from DevPods, VMs, and WSL instances over the local network |
 
 Each phase has a full PRD in `docs/features/`.
 
@@ -198,7 +200,7 @@ Full documentation lives in `docs/`:
 - **[Architecture Decision Records](docs/base/adr/)** — 27 ADRs covering all major decisions
 - **[DDD Domain Model](docs/base/ddd/)** — Bounded contexts, aggregates, entities, events
 - **[API Contracts](docs/features/initial_build/specification/api-contracts.md)** — REST API specification
-- **Phase PRDs** — `docs/features/phase{1-9}*/` — Full specifications for each phase
+- **Phase PRDs** — `docs/features/phase*/` — Full specifications for each phase
 
 ---
 

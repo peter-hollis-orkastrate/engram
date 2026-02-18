@@ -30,9 +30,7 @@ impl Scheduler {
     /// Returns on shutdown signal.
     pub async fn run(&self) {
         loop {
-            let tasks = self
-                .task_store
-                .list(Some(TaskStatus::Pending), None, None);
+            let tasks = self.task_store.list(Some(TaskStatus::Pending), None, None);
 
             let next_task = tasks
                 .iter()
@@ -120,9 +118,7 @@ mod tests {
                 Some(past),
             )
             .unwrap();
-        store
-            .update_status(task.id, TaskStatus::Pending)
-            .unwrap();
+        store.update_status(task.id, TaskStatus::Pending).unwrap();
 
         let scheduler = Scheduler::new(Arc::clone(&store));
 

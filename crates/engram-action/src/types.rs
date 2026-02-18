@@ -241,7 +241,6 @@ pub struct AutoApproveConfig {
     pub shell_command: bool,
 }
 
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -264,12 +263,24 @@ mod tests {
 
     #[test]
     fn test_intent_type_from_str() {
-        assert_eq!("reminder".parse::<IntentType>().unwrap(), IntentType::Reminder);
+        assert_eq!(
+            "reminder".parse::<IntentType>().unwrap(),
+            IntentType::Reminder
+        );
         assert_eq!("task".parse::<IntentType>().unwrap(), IntentType::Task);
-        assert_eq!("question".parse::<IntentType>().unwrap(), IntentType::Question);
+        assert_eq!(
+            "question".parse::<IntentType>().unwrap(),
+            IntentType::Question
+        );
         assert_eq!("note".parse::<IntentType>().unwrap(), IntentType::Note);
-        assert_eq!("url_action".parse::<IntentType>().unwrap(), IntentType::UrlAction);
-        assert_eq!("command".parse::<IntentType>().unwrap(), IntentType::Command);
+        assert_eq!(
+            "url_action".parse::<IntentType>().unwrap(),
+            IntentType::UrlAction
+        );
+        assert_eq!(
+            "command".parse::<IntentType>().unwrap(),
+            IntentType::Command
+        );
         assert!("invalid".parse::<IntentType>().is_err());
     }
 
@@ -304,12 +315,24 @@ mod tests {
 
     #[test]
     fn test_task_status_from_str() {
-        assert_eq!("detected".parse::<TaskStatus>().unwrap(), TaskStatus::Detected);
-        assert_eq!("pending".parse::<TaskStatus>().unwrap(), TaskStatus::Pending);
+        assert_eq!(
+            "detected".parse::<TaskStatus>().unwrap(),
+            TaskStatus::Detected
+        );
+        assert_eq!(
+            "pending".parse::<TaskStatus>().unwrap(),
+            TaskStatus::Pending
+        );
         assert_eq!("active".parse::<TaskStatus>().unwrap(), TaskStatus::Active);
         assert_eq!("done".parse::<TaskStatus>().unwrap(), TaskStatus::Done);
-        assert_eq!("dismissed".parse::<TaskStatus>().unwrap(), TaskStatus::Dismissed);
-        assert_eq!("expired".parse::<TaskStatus>().unwrap(), TaskStatus::Expired);
+        assert_eq!(
+            "dismissed".parse::<TaskStatus>().unwrap(),
+            TaskStatus::Dismissed
+        );
+        assert_eq!(
+            "expired".parse::<TaskStatus>().unwrap(),
+            TaskStatus::Expired
+        );
         assert_eq!("failed".parse::<TaskStatus>().unwrap(), TaskStatus::Failed);
         assert!("invalid".parse::<TaskStatus>().is_err());
     }
@@ -345,12 +368,30 @@ mod tests {
 
     #[test]
     fn test_action_type_from_str() {
-        assert_eq!("reminder".parse::<ActionType>().unwrap(), ActionType::Reminder);
-        assert_eq!("clipboard".parse::<ActionType>().unwrap(), ActionType::Clipboard);
-        assert_eq!("notification".parse::<ActionType>().unwrap(), ActionType::Notification);
-        assert_eq!("url_open".parse::<ActionType>().unwrap(), ActionType::UrlOpen);
-        assert_eq!("quick_note".parse::<ActionType>().unwrap(), ActionType::QuickNote);
-        assert_eq!("shell_command".parse::<ActionType>().unwrap(), ActionType::ShellCommand);
+        assert_eq!(
+            "reminder".parse::<ActionType>().unwrap(),
+            ActionType::Reminder
+        );
+        assert_eq!(
+            "clipboard".parse::<ActionType>().unwrap(),
+            ActionType::Clipboard
+        );
+        assert_eq!(
+            "notification".parse::<ActionType>().unwrap(),
+            ActionType::Notification
+        );
+        assert_eq!(
+            "url_open".parse::<ActionType>().unwrap(),
+            ActionType::UrlOpen
+        );
+        assert_eq!(
+            "quick_note".parse::<ActionType>().unwrap(),
+            ActionType::QuickNote
+        );
+        assert_eq!(
+            "shell_command".parse::<ActionType>().unwrap(),
+            ActionType::ShellCommand
+        );
         assert!("invalid".parse::<ActionType>().is_err());
     }
 
@@ -504,7 +545,10 @@ mod tests {
         assert!((config.min_confidence - rt.min_confidence).abs() < f32::EPSILON);
         assert_eq!(config.task_ttl_days, rt.task_ttl_days);
         assert_eq!(config.auto_approve.reminder, rt.auto_approve.reminder);
-        assert_eq!(config.auto_approve.shell_command, rt.auto_approve.shell_command);
+        assert_eq!(
+            config.auto_approve.shell_command,
+            rt.auto_approve.shell_command
+        );
     }
 
     // ---- Display/FromStr round-trip ----
@@ -641,27 +685,54 @@ mod tests {
     #[test]
     fn test_intent_type_serde_json_format() {
         // Verify serde(rename_all = "snake_case") produces expected JSON values
-        assert_eq!(serde_json::to_string(&IntentType::UrlAction).unwrap(), "\"url_action\"");
-        assert_eq!(serde_json::to_string(&IntentType::Reminder).unwrap(), "\"reminder\"");
+        assert_eq!(
+            serde_json::to_string(&IntentType::UrlAction).unwrap(),
+            "\"url_action\""
+        );
+        assert_eq!(
+            serde_json::to_string(&IntentType::Reminder).unwrap(),
+            "\"reminder\""
+        );
     }
 
     #[test]
     fn test_task_status_serde_json_format() {
-        assert_eq!(serde_json::to_string(&TaskStatus::Detected).unwrap(), "\"detected\"");
-        assert_eq!(serde_json::to_string(&TaskStatus::Failed).unwrap(), "\"failed\"");
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Detected).unwrap(),
+            "\"detected\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Failed).unwrap(),
+            "\"failed\""
+        );
     }
 
     #[test]
     fn test_action_type_serde_json_format() {
-        assert_eq!(serde_json::to_string(&ActionType::ShellCommand).unwrap(), "\"shell_command\"");
-        assert_eq!(serde_json::to_string(&ActionType::QuickNote).unwrap(), "\"quick_note\"");
-        assert_eq!(serde_json::to_string(&ActionType::UrlOpen).unwrap(), "\"url_open\"");
+        assert_eq!(
+            serde_json::to_string(&ActionType::ShellCommand).unwrap(),
+            "\"shell_command\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ActionType::QuickNote).unwrap(),
+            "\"quick_note\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ActionType::UrlOpen).unwrap(),
+            "\"url_open\""
+        );
     }
 
     #[test]
     fn test_safety_level_serde_json_format() {
-        assert_eq!(serde_json::to_string(&SafetyLevel::Passive).unwrap(), "\"passive\"");
-        assert_eq!(serde_json::to_string(&SafetyLevel::Active).unwrap(), "\"active\"");
+        assert_eq!(
+            serde_json::to_string(&SafetyLevel::Passive).unwrap(),
+            "\"passive\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SafetyLevel::Active).unwrap(),
+            "\"active\""
+        );
     }
 
     // ---- ActionPayload with various JSON types ----

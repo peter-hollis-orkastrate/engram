@@ -115,13 +115,19 @@ mod tests {
 
     #[test]
     fn test_shell_command_action_type() {
-        assert_eq!(ShellCommandHandler::new().action_type(), ActionType::ShellCommand);
+        assert_eq!(
+            ShellCommandHandler::new().action_type(),
+            ActionType::ShellCommand
+        );
     }
 
     #[test]
     fn test_shell_command_safety_level_is_active() {
         // This is the critical test: ShellCommand MUST be Active, hardcoded
-        assert_eq!(ShellCommandHandler::new().safety_level(), SafetyLevel::Active);
+        assert_eq!(
+            ShellCommandHandler::new().safety_level(),
+            SafetyLevel::Active
+        );
     }
 
     #[test]

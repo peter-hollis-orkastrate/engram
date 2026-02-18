@@ -131,7 +131,10 @@ mod tests {
     #[test]
     fn test_action_error_timeout_various_values() {
         let err = ActionError::Timeout(0);
-        assert_eq!(err.to_string(), "Action execution timed out after 0 seconds");
+        assert_eq!(
+            err.to_string(),
+            "Action execution timed out after 0 seconds"
+        );
         let err = ActionError::Timeout(u64::MAX);
         assert!(err.to_string().contains("18446744073709551615"));
     }

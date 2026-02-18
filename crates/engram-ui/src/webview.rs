@@ -380,14 +380,14 @@ mod tests {
         let config = WebviewConfig::default();
         let (x, y) = config.panel_position(500, 0, TaskbarEdge::Top);
         assert_eq!(x, 500 - 200);
-        assert_eq!(y, 0 + 32);
+        assert_eq!(y, 32);
     }
 
     #[test]
     fn test_panel_position_left() {
         let config = WebviewConfig::default();
         let (x, y) = config.panel_position(0, 500, TaskbarEdge::Left);
-        assert_eq!(x, 0 + 32);
+        assert_eq!(x, 32);
         assert_eq!(y, 500 - 250);
     }
 

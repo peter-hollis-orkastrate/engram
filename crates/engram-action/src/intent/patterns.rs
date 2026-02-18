@@ -60,8 +60,14 @@ impl PatternSet {
             (r"(?i)\bschedule\s+(?:a\s+)?reminder\b(.+)", 0.90),
             (r"(?i)\bremind\s+me\b(.*)", 0.88),
             // Time-anchored patterns
-            (r"(?i)\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:remind|alert|notify)\b(.+)", 0.88),
-            (r"(?i)\bin\s+\d+\s+(?:minutes?|hours?|mins?|hrs?)\s+remind\b(.+)", 0.88),
+            (
+                r"(?i)\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:remind|alert|notify)\b(.+)",
+                0.88,
+            ),
+            (
+                r"(?i)\bin\s+\d+\s+(?:minutes?|hours?|mins?|hrs?)\s+remind\b(.+)",
+                0.88,
+            ),
             (r"(?i)\btomorrow\s+remind\s+me\b(.+)", 0.90),
             // Heuristic (lower confidence)
             (r"(?i)\bneed\s+to\s+remember\b(.+)", 0.65),
@@ -97,11 +103,26 @@ impl PatternSet {
             (r"(?i)\bnew\s+task:\s*(.+)", 0.92),
             (r"(?i)\baction\s+item:\s*(.+)", 0.92),
             // Obligation patterns with action verbs (heuristic)
-            (r"(?i)\bneed\s+to\s+(?:get|do|make|send|write|call|fix|update|check|review|finish|complete|submit|prepare|create|build|test|deploy|clean|organize|schedule|plan)\b(.+)", 0.70),
-            (r"(?i)\bshould\s+(?:get|do|make|send|write|call|fix|update|check|review|finish|complete|submit|prepare|create|build|test|deploy|clean|organize|schedule|plan)\b(.+)", 0.65),
-            (r"(?i)\bhave\s+to\s+(?:get|do|make|send|write|call|fix|update|check|review|finish|complete|submit|prepare|create|build|test|deploy|clean|organize|schedule|plan)\b(.+)", 0.68),
-            (r"(?i)\bmust\s+(?:get|do|make|send|write|call|fix|update|check|review|finish|complete|submit|prepare|create|build|test|deploy|clean|organize|schedule|plan)\b(.+)", 0.70),
-            (r"(?i)\bgotta\s+(?:get|do|make|send|write|call|fix|update|check|review|finish|complete)\b(.+)", 0.65),
+            (
+                r"(?i)\bneed\s+to\s+(?:get|do|make|send|write|call|fix|update|check|review|finish|complete|submit|prepare|create|build|test|deploy|clean|organize|schedule|plan)\b(.+)",
+                0.70,
+            ),
+            (
+                r"(?i)\bshould\s+(?:get|do|make|send|write|call|fix|update|check|review|finish|complete|submit|prepare|create|build|test|deploy|clean|organize|schedule|plan)\b(.+)",
+                0.65,
+            ),
+            (
+                r"(?i)\bhave\s+to\s+(?:get|do|make|send|write|call|fix|update|check|review|finish|complete|submit|prepare|create|build|test|deploy|clean|organize|schedule|plan)\b(.+)",
+                0.68,
+            ),
+            (
+                r"(?i)\bmust\s+(?:get|do|make|send|write|call|fix|update|check|review|finish|complete|submit|prepare|create|build|test|deploy|clean|organize|schedule|plan)\b(.+)",
+                0.70,
+            ),
+            (
+                r"(?i)\bgotta\s+(?:get|do|make|send|write|call|fix|update|check|review|finish|complete)\b(.+)",
+                0.65,
+            ),
             (r"(?i)\bgoing\s+to\s+need\s+to\b(.+)", 0.62),
             (r"(?i)\bassigned\s+to\s+me:\s*(.+)", 0.88),
             (r"(?i)\bfollow\s+up\s+(?:on|with)\b(.+)", 0.72),
@@ -121,10 +142,22 @@ impl PatternSet {
         let question_patterns: Vec<(&str, f32)> = vec![
             (r"(?i)\bwhat\s+is\b(.+)\?", 0.90),
             (r"(?i)\bhow\s+(?:do|does|can|should|would|to)\b(.+)\?", 0.90),
-            (r"(?i)\bwhy\s+(?:did|does|is|was|do|would|should)\b(.+)\?", 0.88),
-            (r"(?i)\bwhen\s+(?:will|is|was|does|did|should)\b(.+)\?", 0.88),
-            (r"(?i)\bwhere\s+(?:is|are|was|were|do|does|can)\b(.+)\?", 0.88),
-            (r"(?i)\bwho\s+(?:is|was|are|does|did|can|will)\b(.+)\?", 0.88),
+            (
+                r"(?i)\bwhy\s+(?:did|does|is|was|do|would|should)\b(.+)\?",
+                0.88,
+            ),
+            (
+                r"(?i)\bwhen\s+(?:will|is|was|does|did|should)\b(.+)\?",
+                0.88,
+            ),
+            (
+                r"(?i)\bwhere\s+(?:is|are|was|were|do|does|can)\b(.+)\?",
+                0.88,
+            ),
+            (
+                r"(?i)\bwho\s+(?:is|was|are|does|did|can|will)\b(.+)\?",
+                0.88,
+            ),
             (r"(?i)\bwhich\s+\w+\b(.+)\?", 0.85),
             (r"(?i)\bcan\s+(?:you|someone|we|I)\b(.+)\?", 0.80),
             (r"(?i)\bis\s+(?:it|this|that|there)\b(.+)\?", 0.78),
@@ -177,7 +210,10 @@ impl PatternSet {
             (r"(?i)\bcheck\s+out\s+(https?://\S+)", 0.82),
             (r"(?i)\bbrowse\s+(?:to\s+)?(https?://\S+)", 0.82),
             (r"(?i)\bnavigate\s+to\s+(https?://\S+)", 0.82),
-            (r"(?i)\bopen\s+(?:this\s+)?(?:link|url|page|site):\s*(https?://\S+)", 0.85),
+            (
+                r"(?i)\bopen\s+(?:this\s+)?(?:link|url|page|site):\s*(https?://\S+)",
+                0.85,
+            ),
             (r"(?i)\bclick\s+(?:on\s+)?(https?://\S+)", 0.78),
             (r"(?i)\bfollow\s+(?:this\s+)?link:\s*(https?://\S+)", 0.80),
             (r"(https?://\S+)", 0.65),
@@ -198,15 +234,33 @@ impl PatternSet {
         let command_patterns: Vec<(&str, f32)> = vec![
             (r"(?i)\brun\s+(?:the\s+)?command\b(.+)", 0.70),
             (r"(?i)\bexecute\s+(?:the\s+)?command\b(.+)", 0.70),
-            (r"(?i)\bstart\s+(?:the\s+)?(?:process|service|server|app)\b(.+)", 0.68),
-            (r"(?i)\blaunch\s+(?:the\s+)?(?:app|application|program|process)\b(.+)", 0.68),
+            (
+                r"(?i)\bstart\s+(?:the\s+)?(?:process|service|server|app)\b(.+)",
+                0.68,
+            ),
+            (
+                r"(?i)\blaunch\s+(?:the\s+)?(?:app|application|program|process)\b(.+)",
+                0.68,
+            ),
             ("(?i)\\brun\\s*[`'\"](.*?)[`'\"]", 0.70),
             ("(?i)\\bexecute\\s*[`'\"](.*?)[`'\"]", 0.70),
             (r"(?i)\b(?:sudo|bash|sh|cmd)\s+(.+)", 0.68),
-            (r"(?i)\bopen\s+terminal\s+(?:and\s+)?(?:run|execute)\b(.+)", 0.68),
-            (r"(?i)\bkill\s+(?:the\s+)?(?:process|service|server)\b(.+)", 0.65),
-            (r"(?i)\brestart\s+(?:the\s+)?(?:process|service|server)\b(.+)", 0.65),
-            (r"(?i)\bstop\s+(?:the\s+)?(?:process|service|server)\b(.+)", 0.65),
+            (
+                r"(?i)\bopen\s+terminal\s+(?:and\s+)?(?:run|execute)\b(.+)",
+                0.68,
+            ),
+            (
+                r"(?i)\bkill\s+(?:the\s+)?(?:process|service|server)\b(.+)",
+                0.65,
+            ),
+            (
+                r"(?i)\brestart\s+(?:the\s+)?(?:process|service|server)\b(.+)",
+                0.65,
+            ),
+            (
+                r"(?i)\bstop\s+(?:the\s+)?(?:process|service|server)\b(.+)",
+                0.65,
+            ),
         ];
 
         for (pat, conf) in &command_patterns {
@@ -227,11 +281,7 @@ impl PatternSet {
         for pattern in &self.patterns {
             if let Some(caps) = pattern.regex.captures(text) {
                 let matched_text = caps.get(0).map_or("", |m| m.as_str()).to_string();
-                let extracted_action = caps
-                    .get(1)
-                    .map_or("", |m| m.as_str())
-                    .trim()
-                    .to_string();
+                let extracted_action = caps.get(1).map_or("", |m| m.as_str()).trim().to_string();
 
                 // Skip past-tense false positives
                 if is_past_tense_false_positive(text, &matched_text) {
@@ -288,7 +338,10 @@ mod tests {
     fn test_remind_me_to() {
         let matches = ps().detect("remind me to call Bob at 3pm");
         assert!(!matches.is_empty());
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Reminder).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Reminder)
+            .unwrap();
         assert!(m.confidence >= 0.85);
         assert!(m.extracted_action.contains("call Bob"));
     }
@@ -296,42 +349,62 @@ mod tests {
     #[test]
     fn test_dont_forget_to() {
         let matches = ps().detect("don't forget to pick up groceries");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Reminder).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Reminder)
+            .unwrap();
         assert!(m.confidence >= 0.90);
     }
 
     #[test]
     fn test_set_a_reminder() {
         let matches = ps().detect("set a reminder for the meeting tomorrow");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Reminder).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Reminder)
+            .unwrap();
         assert!(m.confidence >= 0.90);
     }
 
     #[test]
     fn test_alert_me() {
         let matches = ps().detect("alert me when the build finishes");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Reminder).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Reminder)
+            .unwrap();
         assert!(m.confidence >= 0.85);
     }
 
     #[test]
     fn test_remember_to() {
         let matches = ps().detect("remember to submit the report");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Reminder).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Reminder)
+            .unwrap();
         assert!(m.confidence >= 0.85);
     }
 
     #[test]
     fn test_past_tense_remembered_does_not_match() {
         let matches = ps().detect("I remembered when we had that meeting");
-        let reminder = matches.iter().find(|m| m.intent_type == IntentType::Reminder);
-        assert!(reminder.is_none(), "Past tense 'remembered' should not match");
+        let reminder = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Reminder);
+        assert!(
+            reminder.is_none(),
+            "Past tense 'remembered' should not match"
+        );
     }
 
     #[test]
     fn test_reminder_case_insensitive() {
         let matches = ps().detect("REMIND ME TO buy milk");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Reminder).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Reminder)
+            .unwrap();
         assert!(m.confidence >= 0.85);
     }
 
@@ -342,7 +415,10 @@ mod tests {
     #[test]
     fn test_todo_marker() {
         let matches = ps().detect("TODO: fix the login bug");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Task).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Task)
+            .unwrap();
         assert!(m.confidence >= 0.90);
         assert!(m.extracted_action.contains("fix the login bug"));
     }
@@ -350,42 +426,60 @@ mod tests {
     #[test]
     fn test_fixme_marker() {
         let matches = ps().detect("FIXME: memory leak in parser");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Task).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Task)
+            .unwrap();
         assert!(m.confidence >= 0.90);
     }
 
     #[test]
     fn test_action_marker() {
         let matches = ps().detect("ACTION: schedule demo with client");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Task).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Task)
+            .unwrap();
         assert!(m.confidence >= 0.90);
     }
 
     #[test]
     fn test_need_to_with_verb() {
         let matches = ps().detect("need to fix the deployment script");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Task).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Task)
+            .unwrap();
         assert!(m.confidence >= 0.60);
     }
 
     #[test]
     fn test_should_with_verb() {
         let matches = ps().detect("should update the documentation");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Task).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Task)
+            .unwrap();
         assert!(m.confidence >= 0.60);
     }
 
     #[test]
     fn test_have_to_with_verb() {
         let matches = ps().detect("have to review the pull request");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Task).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Task)
+            .unwrap();
         assert!(m.confidence >= 0.60);
     }
 
     #[test]
     fn test_hack_marker() {
         let matches = ps().detect("HACK: workaround for upstream bug");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Task).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Task)
+            .unwrap();
         assert!(m.confidence >= 0.90);
     }
 
@@ -396,35 +490,50 @@ mod tests {
     #[test]
     fn test_what_is_question() {
         let matches = ps().detect("what is the capital of France?");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Question).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Question)
+            .unwrap();
         assert!(m.confidence >= 0.85);
     }
 
     #[test]
     fn test_how_do_question() {
         let matches = ps().detect("how do I reset my password?");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Question).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Question)
+            .unwrap();
         assert!(m.confidence >= 0.85);
     }
 
     #[test]
     fn test_why_did_question() {
         let matches = ps().detect("why did the server crash?");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Question).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Question)
+            .unwrap();
         assert!(m.confidence >= 0.85);
     }
 
     #[test]
     fn test_when_will_question() {
         let matches = ps().detect("when will the release happen?");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Question).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Question)
+            .unwrap();
         assert!(m.confidence >= 0.85);
     }
 
     #[test]
     fn test_where_is_question() {
         let matches = ps().detect("where is the config file?");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Question).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Question)
+            .unwrap();
         assert!(m.confidence >= 0.85);
     }
 
@@ -435,7 +544,10 @@ mod tests {
     #[test]
     fn test_note_to_self() {
         let matches = ps().detect("note to self: buy more coffee");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Note).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Note)
+            .unwrap();
         assert!(m.confidence >= 0.85);
         assert!(m.extracted_action.contains("buy more coffee"));
     }
@@ -443,28 +555,40 @@ mod tests {
     #[test]
     fn test_note_colon() {
         let matches = ps().detect("note: the API changed in v3");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Note).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Note)
+            .unwrap();
         assert!(m.confidence >= 0.85);
     }
 
     #[test]
     fn test_jot_down() {
         let matches = ps().detect("jot down the meeting outcomes");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Note).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Note)
+            .unwrap();
         assert!(m.confidence >= 0.75);
     }
 
     #[test]
     fn test_hashtag_note() {
         let matches = ps().detect("The project uses #rust for speed");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Note).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Note)
+            .unwrap();
         assert!(m.confidence >= 0.65);
     }
 
     #[test]
     fn test_quick_note() {
         let matches = ps().detect("quick note: server IP is 10.0.0.1");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Note).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Note)
+            .unwrap();
         assert!(m.confidence >= 0.85);
     }
 
@@ -475,7 +599,10 @@ mod tests {
     #[test]
     fn test_open_url() {
         let matches = ps().detect("open https://example.com/dashboard");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::UrlAction).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::UrlAction)
+            .unwrap();
         assert!(m.confidence >= 0.80);
         assert!(m.extracted_action.contains("https://example.com"));
     }
@@ -483,21 +610,30 @@ mod tests {
     #[test]
     fn test_visit_url() {
         let matches = ps().detect("visit https://github.com/project");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::UrlAction).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::UrlAction)
+            .unwrap();
         assert!(m.confidence >= 0.80);
     }
 
     #[test]
     fn test_go_to_url() {
         let matches = ps().detect("go to https://docs.rs/crate");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::UrlAction).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::UrlAction)
+            .unwrap();
         assert!(m.confidence >= 0.80);
     }
 
     #[test]
     fn test_bare_url() {
         let matches = ps().detect("Check this: https://example.com");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::UrlAction).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::UrlAction)
+            .unwrap();
         assert!(m.confidence >= 0.60);
         assert!(m.confidence <= 0.70);
     }
@@ -505,7 +641,10 @@ mod tests {
     #[test]
     fn test_check_out_url() {
         let matches = ps().detect("check out https://example.com/article");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::UrlAction).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::UrlAction)
+            .unwrap();
         assert!(m.confidence >= 0.78);
     }
 
@@ -516,35 +655,53 @@ mod tests {
     #[test]
     fn test_run_command() {
         let matches = ps().detect("run command npm install");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Command).unwrap();
-        assert!(m.confidence <= 0.70, "Command confidence must be capped at 0.70");
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Command)
+            .unwrap();
+        assert!(
+            m.confidence <= 0.70,
+            "Command confidence must be capped at 0.70"
+        );
     }
 
     #[test]
     fn test_execute_command() {
         let matches = ps().detect("execute command cargo build --release");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Command).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Command)
+            .unwrap();
         assert!(m.confidence <= 0.70);
     }
 
     #[test]
     fn test_launch_app() {
         let matches = ps().detect("launch the app server");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Command).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Command)
+            .unwrap();
         assert!(m.confidence <= 0.70);
     }
 
     #[test]
     fn test_start_service() {
         let matches = ps().detect("start the service nginx");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Command).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Command)
+            .unwrap();
         assert!(m.confidence <= 0.70);
     }
 
     #[test]
     fn test_command_quoted() {
         let matches = ps().detect("run `docker compose up`");
-        let m = matches.iter().find(|m| m.intent_type == IntentType::Command).unwrap();
+        let m = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Command)
+            .unwrap();
         assert!(m.confidence <= 0.70);
         assert!(m.extracted_action.contains("docker compose up"));
     }
@@ -579,7 +736,9 @@ mod tests {
     #[test]
     fn test_past_tense_reminded_does_not_match() {
         let matches = ps().detect("I was reminded about the deadline last week");
-        let reminder = matches.iter().find(|m| m.intent_type == IntentType::Reminder);
+        let reminder = matches
+            .iter()
+            .find(|m| m.intent_type == IntentType::Reminder);
         assert!(reminder.is_none());
     }
 

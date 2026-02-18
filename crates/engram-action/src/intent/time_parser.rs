@@ -111,8 +111,9 @@ impl TimeExpressionParser {
 
     /// "next Monday/Tuesday/..." -> next occurrence at 09:00
     fn parse_next_weekday(text: &str) -> Option<Timestamp> {
-        let re = Regex::new(r"\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b")
-            .ok()?;
+        let re =
+            Regex::new(r"\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b")
+                .ok()?;
         let caps = re.captures(text)?;
         let day_str = caps.get(1)?.as_str();
         let target_weekday = match day_str {
@@ -215,7 +216,11 @@ mod tests {
         let ts = TimeExpressionParser::parse("in 5 minutes").unwrap();
         let now = Timestamp::now().0;
         let diff = ts.0 - now;
-        assert!((290..=310).contains(&diff), "Expected ~300s, got {}s diff", diff);
+        assert!(
+            (290..=310).contains(&diff),
+            "Expected ~300s, got {}s diff",
+            diff
+        );
     }
 
     #[test]
@@ -223,7 +228,11 @@ mod tests {
         let ts = TimeExpressionParser::parse("in 30 mins").unwrap();
         let now = Timestamp::now().0;
         let diff = ts.0 - now;
-        assert!((1790..=1810).contains(&diff), "Expected ~1800s, got {}s diff", diff);
+        assert!(
+            (1790..=1810).contains(&diff),
+            "Expected ~1800s, got {}s diff",
+            diff
+        );
     }
 
     #[test]
@@ -231,7 +240,11 @@ mod tests {
         let ts = TimeExpressionParser::parse("in 1 minute").unwrap();
         let now = Timestamp::now().0;
         let diff = ts.0 - now;
-        assert!((50..=70).contains(&diff), "Expected ~60s, got {}s diff", diff);
+        assert!(
+            (50..=70).contains(&diff),
+            "Expected ~60s, got {}s diff",
+            diff
+        );
     }
 
     // =====================================================================
@@ -243,7 +256,11 @@ mod tests {
         let ts = TimeExpressionParser::parse("in 2 hours").unwrap();
         let now = Timestamp::now().0;
         let diff = ts.0 - now;
-        assert!((7190..=7210).contains(&diff), "Expected ~7200s, got {}s diff", diff);
+        assert!(
+            (7190..=7210).contains(&diff),
+            "Expected ~7200s, got {}s diff",
+            diff
+        );
     }
 
     #[test]
@@ -251,7 +268,11 @@ mod tests {
         let ts = TimeExpressionParser::parse("in an hour").unwrap();
         let now = Timestamp::now().0;
         let diff = ts.0 - now;
-        assert!((3590..=3610).contains(&diff), "Expected ~3600s, got {}s diff", diff);
+        assert!(
+            (3590..=3610).contains(&diff),
+            "Expected ~3600s, got {}s diff",
+            diff
+        );
     }
 
     #[test]
@@ -259,7 +280,11 @@ mod tests {
         let ts = TimeExpressionParser::parse("in 1 hr").unwrap();
         let now = Timestamp::now().0;
         let diff = ts.0 - now;
-        assert!((3590..=3610).contains(&diff), "Expected ~3600s, got {}s diff", diff);
+        assert!(
+            (3590..=3610).contains(&diff),
+            "Expected ~3600s, got {}s diff",
+            diff
+        );
     }
 
     // =====================================================================
@@ -296,7 +321,10 @@ mod tests {
         let dt = ts.to_datetime();
         assert_eq!(dt.hour(), 15);
         assert_eq!(dt.minute(), 0);
-        assert!(ts.0 > Timestamp::now().0, "Resolved time should be in the future");
+        assert!(
+            ts.0 > Timestamp::now().0,
+            "Resolved time should be in the future"
+        );
     }
 
     #[test]

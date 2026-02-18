@@ -853,11 +853,9 @@ mod tests {
         .unwrap();
 
         let status: String = conn
-            .query_row(
-                "SELECT status FROM tasks WHERE id = 'task-1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT status FROM tasks WHERE id = 'task-1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(status, "pending");
     }
@@ -949,12 +947,20 @@ mod tests {
         .unwrap();
 
         let acted_on: i64 = conn
-            .query_row("SELECT acted_on FROM intents WHERE id = 'int-u'", [], |row| row.get(0))
+            .query_row(
+                "SELECT acted_on FROM intents WHERE id = 'int-u'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(acted_on, 1);
 
         let confidence: f64 = conn
-            .query_row("SELECT confidence FROM intents WHERE id = 'int-u'", [], |row| row.get(0))
+            .query_row(
+                "SELECT confidence FROM intents WHERE id = 'int-u'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert!((confidence - 0.95).abs() < f64::EPSILON);
     }
@@ -971,10 +977,15 @@ mod tests {
         )
         .unwrap();
 
-        conn.execute("DELETE FROM intents WHERE id = 'int-d'", []).unwrap();
+        conn.execute("DELETE FROM intents WHERE id = 'int-d'", [])
+            .unwrap();
 
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM intents WHERE id = 'int-d'", [], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM intents WHERE id = 'int-d'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(count, 0);
     }
@@ -992,7 +1003,11 @@ mod tests {
         .unwrap();
 
         let acted_on: i64 = conn
-            .query_row("SELECT acted_on FROM intents WHERE id = 'int-def'", [], |row| row.get(0))
+            .query_row(
+                "SELECT acted_on FROM intents WHERE id = 'int-def'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(acted_on, 0);
     }
@@ -1056,7 +1071,11 @@ mod tests {
         .unwrap();
 
         let status: String = conn
-            .query_row("SELECT status FROM tasks WHERE id = 'task-upd'", [], |row| row.get(0))
+            .query_row(
+                "SELECT status FROM tasks WHERE id = 'task-upd'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(status, "active");
     }
@@ -1074,8 +1093,16 @@ mod tests {
         .unwrap();
 
         // detected -> pending -> active -> done
-        conn.execute("UPDATE tasks SET status = 'pending' WHERE id = 'task-lc'", []).unwrap();
-        conn.execute("UPDATE tasks SET status = 'active' WHERE id = 'task-lc'", []).unwrap();
+        conn.execute(
+            "UPDATE tasks SET status = 'pending' WHERE id = 'task-lc'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE tasks SET status = 'active' WHERE id = 'task-lc'",
+            [],
+        )
+        .unwrap();
         conn.execute(
             "UPDATE tasks SET status = 'done', completed_at = '2026-02-18T17:00:00' WHERE id = 'task-lc'",
             [],
@@ -1083,7 +1110,9 @@ mod tests {
         .unwrap();
 
         let status: String = conn
-            .query_row("SELECT status FROM tasks WHERE id = 'task-lc'", [], |row| row.get(0))
+            .query_row("SELECT status FROM tasks WHERE id = 'task-lc'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(status, "done");
 
@@ -1178,7 +1207,11 @@ mod tests {
         .unwrap();
 
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM intents WHERE id = 'int-idem'", [], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM intents WHERE id = 'int-idem'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(count, 1);
     }
@@ -1196,7 +1229,11 @@ mod tests {
         .unwrap();
 
         let status: String = conn
-            .query_row("SELECT status FROM tasks WHERE id = 'task-def'", [], |row| row.get(0))
+            .query_row(
+                "SELECT status FROM tasks WHERE id = 'task-def'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(status, "pending");
     }
@@ -1207,7 +1244,9 @@ mod tests {
         run_migrations(&conn).unwrap();
 
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(count, 5);
 

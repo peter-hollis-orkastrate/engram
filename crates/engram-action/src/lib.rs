@@ -17,7 +17,8 @@ pub use error::{ActionError, IntentError, SchedulerError, TaskError};
 pub use handler::{ActionHandler, ActionRegistry};
 pub use orchestrator::Orchestrator;
 pub use scheduler::Scheduler;
+pub use task::TaskStore;
 pub use types::{
-    ActionConfig, ActionHistoryRecord, ActionPayload, ActionResult, ActionType,
-    AutoApproveConfig, Intent, IntentType, SafetyLevel, Task, TaskStatus,
+    ActionConfig, ActionHistoryRecord, ActionPayload, ActionResult, ActionType, AutoApproveConfig,
+    Intent, IntentType, SafetyLevel, Task, TaskStatus,
 };

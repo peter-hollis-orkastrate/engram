@@ -124,7 +124,10 @@ mod tests {
         let detector = default_detector();
         let intents = detector.detect("remind me to call Bob at 3pm", Uuid::new_v4());
         assert!(!intents.is_empty());
-        let reminder = intents.iter().find(|i| i.intent_type == IntentType::Reminder).unwrap();
+        let reminder = intents
+            .iter()
+            .find(|i| i.intent_type == IntentType::Reminder)
+            .unwrap();
         assert!(reminder.confidence >= 0.85);
         assert!(reminder.extracted_action.contains("call Bob"));
     }
@@ -133,15 +136,24 @@ mod tests {
     fn test_reminder_has_extracted_time() {
         let detector = default_detector();
         let intents = detector.detect("remind me to call Bob in 5 minutes", Uuid::new_v4());
-        let reminder = intents.iter().find(|i| i.intent_type == IntentType::Reminder).unwrap();
-        assert!(reminder.extracted_time.is_some(), "Reminder should have extracted time");
+        let reminder = intents
+            .iter()
+            .find(|i| i.intent_type == IntentType::Reminder)
+            .unwrap();
+        assert!(
+            reminder.extracted_time.is_some(),
+            "Reminder should have extracted time"
+        );
     }
 
     #[test]
     fn test_task_detection() {
         let detector = default_detector();
         let intents = detector.detect("TODO: fix the login bug", Uuid::new_v4());
-        let task = intents.iter().find(|i| i.intent_type == IntentType::Task).unwrap();
+        let task = intents
+            .iter()
+            .find(|i| i.intent_type == IntentType::Task)
+            .unwrap();
         assert!(task.confidence >= 0.90);
     }
 
@@ -149,7 +161,10 @@ mod tests {
     fn test_question_detection() {
         let detector = default_detector();
         let intents = detector.detect("what is the meaning of life?", Uuid::new_v4());
-        let q = intents.iter().find(|i| i.intent_type == IntentType::Question).unwrap();
+        let q = intents
+            .iter()
+            .find(|i| i.intent_type == IntentType::Question)
+            .unwrap();
         assert!(q.confidence >= 0.80);
     }
 
@@ -159,7 +174,10 @@ mod tests {
         // This should filter out most heuristic patterns
         let intents = detector.detect("need to fix the bug", Uuid::new_v4());
         let task = intents.iter().find(|i| i.intent_type == IntentType::Task);
-        assert!(task.is_none(), "Heuristic task should be below 0.95 threshold");
+        assert!(
+            task.is_none(),
+            "Heuristic task should be below 0.95 threshold"
+        );
     }
 
     #[test]
@@ -167,9 +185,16 @@ mod tests {
         let detector = default_detector();
         // Text that might match multiple reminder patterns with same action
         let intents = detector.detect("remind me to call Bob", Uuid::new_v4());
-        let reminder_count = intents.iter().filter(|i| i.intent_type == IntentType::Reminder).count();
+        let reminder_count = intents
+            .iter()
+            .filter(|i| i.intent_type == IntentType::Reminder)
+            .count();
         // Should be deduplicated to at most 1 reminder with same action
-        assert!(reminder_count <= 2, "Expected dedup, got {} reminders", reminder_count);
+        assert!(
+            reminder_count <= 2,
+            "Expected dedup, got {} reminders",
+            reminder_count
+        );
     }
 
     #[test]
@@ -201,7 +226,10 @@ mod tests {
     #[test]
     fn test_intents_have_unique_ids() {
         let detector = default_detector();
-        let intents = detector.detect("TODO: fix the login bug and visit https://example.com", Uuid::new_v4());
+        let intents = detector.detect(
+            "TODO: fix the login bug and visit https://example.com",
+            Uuid::new_v4(),
+        );
         if intents.len() >= 2 {
             let ids: std::collections::HashSet<_> = intents.iter().map(|i| i.id).collect();
             assert_eq!(ids.len(), intents.len(), "All intent IDs should be unique");
@@ -212,8 +240,15 @@ mod tests {
     fn test_command_max_confidence_capped() {
         let detector = default_detector();
         let intents = detector.detect("run command npm install", Uuid::new_v4());
-        if let Some(cmd) = intents.iter().find(|i| i.intent_type == IntentType::Command) {
-            assert!(cmd.confidence <= 0.70, "Command confidence capped at 0.70, got {}", cmd.confidence);
+        if let Some(cmd) = intents
+            .iter()
+            .find(|i| i.intent_type == IntentType::Command)
+        {
+            assert!(
+                cmd.confidence <= 0.70,
+                "Command confidence capped at 0.70, got {}",
+                cmd.confidence
+            );
         }
     }
 
@@ -222,7 +257,10 @@ mod tests {
         let detector = default_detector();
         let intents = detector.detect("TODO: fix the bug in 5 minutes", Uuid::new_v4());
         if let Some(task) = intents.iter().find(|i| i.intent_type == IntentType::Task) {
-            assert!(task.extracted_time.is_none(), "Non-reminder should not have extracted time");
+            assert!(
+                task.extracted_time.is_none(),
+                "Non-reminder should not have extracted time"
+            );
         }
     }
 

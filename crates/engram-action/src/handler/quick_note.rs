@@ -34,11 +34,7 @@ impl ActionHandler for QuickNoteHandler {
             ));
         }
 
-        let preview = if text.len() > 50 {
-            &text[..50]
-        } else {
-            text
-        };
+        let preview = if text.len() > 50 { &text[..50] } else { text };
 
         tracing::info!(text_len = text.len(), "Note saved");
 
@@ -55,11 +51,7 @@ impl ActionHandler for QuickNoteHandler {
             .get("text")
             .and_then(|v| v.as_str())
             .unwrap_or("<no text>");
-        let preview = if text.len() > 50 {
-            &text[..50]
-        } else {
-            text
-        };
+        let preview = if text.len() > 50 { &text[..50] } else { text };
         format!("Save note: {}", preview)
     }
 }

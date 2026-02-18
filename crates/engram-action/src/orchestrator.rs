@@ -19,11 +19,7 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     /// Create a new orchestrator with the given registry, task store, and config.
-    pub fn new(
-        registry: ActionRegistry,
-        task_store: Arc<TaskStore>,
-        config: ActionConfig,
-    ) -> Self {
+    pub fn new(registry: ActionRegistry, task_store: Arc<TaskStore>, config: ActionConfig) -> Self {
         Self {
             registry,
             task_store,
@@ -52,8 +48,7 @@ impl Orchestrator {
         };
 
         // Check safety routing
-        let needs_confirmation =
-            self.needs_confirmation(handler.safety_level(), task.action_type);
+        let needs_confirmation = self.needs_confirmation(handler.safety_level(), task.action_type);
 
         if needs_confirmation {
             // Route to ConfirmationGate (caller is responsible for that)
@@ -84,11 +79,7 @@ impl Orchestrator {
     }
 
     /// Determine whether an action needs user confirmation before execution.
-    pub fn needs_confirmation(
-        &self,
-        safety_level: SafetyLevel,
-        action_type: ActionType,
-    ) -> bool {
+    pub fn needs_confirmation(&self, safety_level: SafetyLevel, action_type: ActionType) -> bool {
         match safety_level {
             SafetyLevel::Active => true, // Always require confirmation for active actions
             SafetyLevel::Passive => {
@@ -201,12 +192,8 @@ mod tests {
             .unwrap();
 
         // Move to Active state
-        store
-            .update_status(task.id, TaskStatus::Pending)
-            .unwrap();
-        store
-            .update_status(task.id, TaskStatus::Active)
-            .unwrap();
+        store.update_status(task.id, TaskStatus::Pending).unwrap();
+        store.update_status(task.id, TaskStatus::Active).unwrap();
 
         let result = orch.execute_task(task.id).await;
         assert!(result.is_ok());
@@ -230,12 +217,8 @@ mod tests {
             )
             .unwrap();
 
-        store
-            .update_status(task.id, TaskStatus::Pending)
-            .unwrap();
-        store
-            .update_status(task.id, TaskStatus::Active)
-            .unwrap();
+        store.update_status(task.id, TaskStatus::Pending).unwrap();
+        store.update_status(task.id, TaskStatus::Active).unwrap();
 
         // Not auto-approved, so should return Ok without executing
         let result = orch.execute_task(task.id).await;

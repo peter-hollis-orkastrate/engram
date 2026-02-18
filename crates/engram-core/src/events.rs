@@ -1567,51 +1567,249 @@ mod tests {
         let id = Uuid::new_v4();
         let sid = Uuid::new_v4();
         let events: Vec<DomainEvent> = vec![
-            DomainEvent::ScreenCaptured { frame_id: id, timestamp: ts },
-            DomainEvent::TextExtracted { frame_id: id, app_name: AppName("A".to_string()), window_title: WindowTitle::new("W".to_string()), text_length: 1, timestamp: ts },
-            DomainEvent::FrameSkipped { frame_id: id, reason: FrameSkipReason::NoChange, timestamp: ts },
-            DomainEvent::FrameDeduplicated { frame_id: id, similarity: 0.99, timestamp: ts },
-            DomainEvent::CaptureStarted { session_id: sid, timestamp: ts },
-            DomainEvent::CapturePaused { session_id: sid, timestamp: ts },
-            DomainEvent::CaptureResumed { session_id: sid, timestamp: ts },
-            DomainEvent::CaptureSessionStopped { session_id: sid, frame_count: 1, duration_secs: 1.0, timestamp: ts },
-            DomainEvent::AudioChunkReceived { chunk_id: id, session_id: sid, duration_secs: 1.0, timestamp: ts },
-            DomainEvent::SpeechTranscribed { chunk_id: id, text: "t".to_string(), confidence: 0.9, duration_secs: 1.0, timestamp: ts },
-            DomainEvent::AudioChunkTranscribed { chunk_id: id, text_length: 1, language: "en".to_string(), timestamp: ts },
-            DomainEvent::SilenceDetected { duration_secs: 1.0, timestamp: ts },
-            DomainEvent::AudioSessionStarted { session_id: sid, device_name: "m".to_string(), timestamp: ts },
-            DomainEvent::AudioSessionStopped { session_id: sid, device_name: "m".to_string(), chunks_captured: 1, timestamp: ts },
-            DomainEvent::TranscriptionFailed { chunk_id: id, reason: "e".to_string(), timestamp: ts },
-            DomainEvent::DictationStarted { session_id: sid, mode: DictationMode::Type, timestamp: ts },
-            DomainEvent::DictationCompleted { session_id: sid, text: "t".to_string(), target_app: AppName("A".to_string()), duration_secs: 1.0, timestamp: ts },
-            DomainEvent::DictationCancelled { session_id: sid, timestamp: ts },
-            DomainEvent::DictationFailed { session_id: sid, reason: "e".to_string(), timestamp: ts },
-            DomainEvent::DictationSilenceTimeout { session_id: sid, silence_duration_secs: 1, timestamp: ts },
-            DomainEvent::DictationMaxDuration { session_id: sid, duration_secs: 1, timestamp: ts },
-            DomainEvent::StorageTierChanged { entry_id: id, from_tier: StorageTier::Hot, to_tier: StorageTier::Warm, timestamp: ts },
-            DomainEvent::VectorQuantized { entry_id: id, from_format: VectorFormat::F32, to_format: VectorFormat::Int8, timestamp: ts },
-            DomainEvent::StoragePurgeCompleted { entries_processed: 1, bytes_reclaimed: 1, timestamp: ts },
-            DomainEvent::PiiRedacted { entry_id: id, redaction_count: 1, redaction_types: vec!["e".to_string()], timestamp: ts },
-            DomainEvent::SearchPerformed { query: "q".to_string(), result_count: 1, route: "s".to_string(), latency_ms: 1, timestamp: ts },
-            DomainEvent::ConfigUpdated { changed_sections: vec!["g".to_string()], timestamp: ts },
-            DomainEvent::ApplicationStarted { version: "1".to_string(), config_path: "/".to_string(), timestamp: ts },
-            DomainEvent::ApplicationShutdown { uptime_secs: 1, clean_exit: true, timestamp: ts },
-            DomainEvent::ComponentHealthChanged { component: "c".to_string(), healthy: true, reason: "ok".to_string(), timestamp: ts },
-            DomainEvent::SummaryGenerated { summary_id: id, chunk_count: 1, source_app: None, timestamp: ts },
-            DomainEvent::EntitiesExtracted { entity_count: 1, entity_types: vec!["p".to_string()], timestamp: ts },
-            DomainEvent::DailyDigestGenerated { date: "2026-02-18".to_string(), summary_count: 1, entity_count: 1, timestamp: ts },
-            DomainEvent::TopicClustered { cluster_count: 1, summary_count: 1, timestamp: ts },
-            DomainEvent::InsightExported { path: "/v".to_string(), format: "obsidian".to_string(), file_count: 1, timestamp: ts },
-            DomainEvent::IntentDetected { intent_id: id, intent_type: "r".to_string(), confidence: 0.9, source_chunk_id: id, timestamp: ts },
-            DomainEvent::TaskCreated { task_id: id, action_type: "r".to_string(), source: "i".to_string(), timestamp: ts },
-            DomainEvent::TaskCompleted { task_id: id, action_type: "r".to_string(), timestamp: ts },
-            DomainEvent::TaskExpired { task_id: id, reason: "t".to_string(), timestamp: ts },
-            DomainEvent::ActionQueued { task_id: id, action_type: "r".to_string(), scheduled_at: None, timestamp: ts },
-            DomainEvent::ActionExecuted { task_id: id, action_type: "r".to_string(), result: "ok".to_string(), timestamp: ts },
-            DomainEvent::ActionFailed { task_id: id, action_type: "r".to_string(), error: "e".to_string(), timestamp: ts },
-            DomainEvent::ReminderTriggered { task_id: id, scheduled_at: "t".to_string(), timestamp: ts },
-            DomainEvent::ConfirmationRequested { task_id: id, action_type: "r".to_string(), timestamp: ts },
-            DomainEvent::ConfirmationReceived { task_id: id, approved: true, timestamp: ts },
+            DomainEvent::ScreenCaptured {
+                frame_id: id,
+                timestamp: ts,
+            },
+            DomainEvent::TextExtracted {
+                frame_id: id,
+                app_name: AppName("A".to_string()),
+                window_title: WindowTitle::new("W".to_string()),
+                text_length: 1,
+                timestamp: ts,
+            },
+            DomainEvent::FrameSkipped {
+                frame_id: id,
+                reason: FrameSkipReason::NoChange,
+                timestamp: ts,
+            },
+            DomainEvent::FrameDeduplicated {
+                frame_id: id,
+                similarity: 0.99,
+                timestamp: ts,
+            },
+            DomainEvent::CaptureStarted {
+                session_id: sid,
+                timestamp: ts,
+            },
+            DomainEvent::CapturePaused {
+                session_id: sid,
+                timestamp: ts,
+            },
+            DomainEvent::CaptureResumed {
+                session_id: sid,
+                timestamp: ts,
+            },
+            DomainEvent::CaptureSessionStopped {
+                session_id: sid,
+                frame_count: 1,
+                duration_secs: 1.0,
+                timestamp: ts,
+            },
+            DomainEvent::AudioChunkReceived {
+                chunk_id: id,
+                session_id: sid,
+                duration_secs: 1.0,
+                timestamp: ts,
+            },
+            DomainEvent::SpeechTranscribed {
+                chunk_id: id,
+                text: "t".to_string(),
+                confidence: 0.9,
+                duration_secs: 1.0,
+                timestamp: ts,
+            },
+            DomainEvent::AudioChunkTranscribed {
+                chunk_id: id,
+                text_length: 1,
+                language: "en".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::SilenceDetected {
+                duration_secs: 1.0,
+                timestamp: ts,
+            },
+            DomainEvent::AudioSessionStarted {
+                session_id: sid,
+                device_name: "m".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::AudioSessionStopped {
+                session_id: sid,
+                device_name: "m".to_string(),
+                chunks_captured: 1,
+                timestamp: ts,
+            },
+            DomainEvent::TranscriptionFailed {
+                chunk_id: id,
+                reason: "e".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::DictationStarted {
+                session_id: sid,
+                mode: DictationMode::Type,
+                timestamp: ts,
+            },
+            DomainEvent::DictationCompleted {
+                session_id: sid,
+                text: "t".to_string(),
+                target_app: AppName("A".to_string()),
+                duration_secs: 1.0,
+                timestamp: ts,
+            },
+            DomainEvent::DictationCancelled {
+                session_id: sid,
+                timestamp: ts,
+            },
+            DomainEvent::DictationFailed {
+                session_id: sid,
+                reason: "e".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::DictationSilenceTimeout {
+                session_id: sid,
+                silence_duration_secs: 1,
+                timestamp: ts,
+            },
+            DomainEvent::DictationMaxDuration {
+                session_id: sid,
+                duration_secs: 1,
+                timestamp: ts,
+            },
+            DomainEvent::StorageTierChanged {
+                entry_id: id,
+                from_tier: StorageTier::Hot,
+                to_tier: StorageTier::Warm,
+                timestamp: ts,
+            },
+            DomainEvent::VectorQuantized {
+                entry_id: id,
+                from_format: VectorFormat::F32,
+                to_format: VectorFormat::Int8,
+                timestamp: ts,
+            },
+            DomainEvent::StoragePurgeCompleted {
+                entries_processed: 1,
+                bytes_reclaimed: 1,
+                timestamp: ts,
+            },
+            DomainEvent::PiiRedacted {
+                entry_id: id,
+                redaction_count: 1,
+                redaction_types: vec!["e".to_string()],
+                timestamp: ts,
+            },
+            DomainEvent::SearchPerformed {
+                query: "q".to_string(),
+                result_count: 1,
+                route: "s".to_string(),
+                latency_ms: 1,
+                timestamp: ts,
+            },
+            DomainEvent::ConfigUpdated {
+                changed_sections: vec!["g".to_string()],
+                timestamp: ts,
+            },
+            DomainEvent::ApplicationStarted {
+                version: "1".to_string(),
+                config_path: "/".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::ApplicationShutdown {
+                uptime_secs: 1,
+                clean_exit: true,
+                timestamp: ts,
+            },
+            DomainEvent::ComponentHealthChanged {
+                component: "c".to_string(),
+                healthy: true,
+                reason: "ok".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::SummaryGenerated {
+                summary_id: id,
+                chunk_count: 1,
+                source_app: None,
+                timestamp: ts,
+            },
+            DomainEvent::EntitiesExtracted {
+                entity_count: 1,
+                entity_types: vec!["p".to_string()],
+                timestamp: ts,
+            },
+            DomainEvent::DailyDigestGenerated {
+                date: "2026-02-18".to_string(),
+                summary_count: 1,
+                entity_count: 1,
+                timestamp: ts,
+            },
+            DomainEvent::TopicClustered {
+                cluster_count: 1,
+                summary_count: 1,
+                timestamp: ts,
+            },
+            DomainEvent::InsightExported {
+                path: "/v".to_string(),
+                format: "obsidian".to_string(),
+                file_count: 1,
+                timestamp: ts,
+            },
+            DomainEvent::IntentDetected {
+                intent_id: id,
+                intent_type: "r".to_string(),
+                confidence: 0.9,
+                source_chunk_id: id,
+                timestamp: ts,
+            },
+            DomainEvent::TaskCreated {
+                task_id: id,
+                action_type: "r".to_string(),
+                source: "i".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::TaskCompleted {
+                task_id: id,
+                action_type: "r".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::TaskExpired {
+                task_id: id,
+                reason: "t".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::ActionQueued {
+                task_id: id,
+                action_type: "r".to_string(),
+                scheduled_at: None,
+                timestamp: ts,
+            },
+            DomainEvent::ActionExecuted {
+                task_id: id,
+                action_type: "r".to_string(),
+                result: "ok".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::ActionFailed {
+                task_id: id,
+                action_type: "r".to_string(),
+                error: "e".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::ReminderTriggered {
+                task_id: id,
+                scheduled_at: "t".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::ConfirmationRequested {
+                task_id: id,
+                action_type: "r".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::ConfirmationReceived {
+                task_id: id,
+                approved: true,
+                timestamp: ts,
+            },
         ];
 
         let mut names: Vec<&str> = events.iter().map(|e| e.event_name()).collect();
@@ -1636,7 +1834,12 @@ mod tests {
         };
         let json = serde_json::to_string(&event).unwrap();
         let rt: DomainEvent = serde_json::from_str(&json).unwrap();
-        if let DomainEvent::IntentDetected { intent_type, confidence, .. } = &rt {
+        if let DomainEvent::IntentDetected {
+            intent_type,
+            confidence,
+            ..
+        } = &rt
+        {
             assert_eq!(intent_type, "task");
             assert!((confidence - 0.77).abs() < f32::EPSILON);
         } else {
@@ -1666,7 +1869,12 @@ mod tests {
         };
         let json = serde_json::to_string(&event).unwrap();
         let rt: DomainEvent = serde_json::from_str(&json).unwrap();
-        if let DomainEvent::ActionQueued { scheduled_at, action_type, .. } = &rt {
+        if let DomainEvent::ActionQueued {
+            scheduled_at,
+            action_type,
+            ..
+        } = &rt
+        {
             assert!(scheduled_at.is_none());
             assert_eq!(action_type, "notification");
         } else {

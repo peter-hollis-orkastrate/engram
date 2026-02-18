@@ -40,6 +40,24 @@ pub enum EngramError {
 
     #[error("Serialization error: {0}")]
     Serialization(String),
+
+    #[error("PII detection failed: {0}")]
+    PiiDetection(String),
+
+    #[error("Luhn validation failed")]
+    LuhnValidation,
+
+    #[error("Protected field modification denied: {field}")]
+    ProtectedField { field: String },
+
+    #[error("Rate limit exceeded")]
+    RateLimited,
+
+    #[error("Payload too large: {size} bytes exceeds {limit} bytes")]
+    PayloadTooLarge { size: usize, limit: usize },
+
+    #[error("Shutdown in progress")]
+    ShuttingDown,
 }
 
 impl From<toml::de::Error> for EngramError {
@@ -95,8 +113,14 @@ mod tests {
             EngramError::Search("test".into()),
             EngramError::Api("test".into()),
             EngramError::Serialization("test".into()),
+            EngramError::PiiDetection("test".into()),
+            EngramError::LuhnValidation,
+            EngramError::ProtectedField { field: "test".into() },
+            EngramError::RateLimited,
+            EngramError::PayloadTooLarge { size: 100, limit: 50 },
+            EngramError::ShuttingDown,
         ];
-        assert_eq!(errors.len(), 10);
+        assert_eq!(errors.len(), 16);
     }
 
     // =========================================================================

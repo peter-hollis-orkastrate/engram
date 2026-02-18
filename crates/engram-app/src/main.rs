@@ -13,8 +13,9 @@
 //! - Dictation hotkey listener (via engram-dictation)
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use engram_core::config::EngramConfig;
 use engram_storage::Database;
@@ -23,6 +24,19 @@ use engram_vector::{EngramPipeline, VectorIndex};
 
 use engram_api::routes;
 use engram_api::state::AppState;
+
+/// Set owner-only permissions (0o700) on a directory.
+#[cfg(unix)]
+fn set_directory_permissions(path: &std::path::Path) -> Result<(), std::io::Error> {
+    use std::os::unix::fs::PermissionsExt;
+    let perms = std::fs::Permissions::from_mode(0o700);
+    std::fs::set_permissions(path, perms)
+}
+
+#[cfg(not(unix))]
+fn set_directory_permissions(_path: &std::path::Path) -> Result<(), std::io::Error> {
+    Ok(()) // Windows ACLs handled separately
+}
 
 use engram_capture::{CaptureConfig, CaptureService, WindowsCaptureService};
 use engram_ocr::{OcrConfig, OcrService, WindowsOcrService};
@@ -413,6 +427,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    let app_start_time = Instant::now();
     tracing::info!("Starting Engram v{}", env!("CARGO_PKG_VERSION"));
 
     // Config.
@@ -427,6 +442,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = std::fs::create_dir_all(&data_dir) {
         tracing::error!(path = %data_dir.display(), error = %e, "Failed to create data directory");
         return Err(e.into());
+    }
+
+    // Set owner-only permissions on the data directory.
+    if let Err(e) = set_directory_permissions(&data_dir) {
+        tracing::warn!(path = %data_dir.display(), error = %e, "Failed to set directory permissions");
     }
 
     let db_path = data_dir.join("engram.db");
@@ -466,7 +486,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate or load API authentication token.
     let token_path = data_dir.join(".api_token");
     let api_token = engram_api::auth::load_or_generate_token(&token_path);
-    tracing::info!("API token: {}", api_token);
+    tracing::info!("API token loaded (length: {} chars)", api_token.len());
 
     // Shared state for audio and dictation control.
     let audio_active = Arc::new(AtomicBool::new(false));
@@ -590,7 +610,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(addr = %addr, "API server listening");
     tracing::info!("Dashboard at http://{}/ui", addr);
 
-    axum::serve(listener, router).await?;
+    // Emit ApplicationStarted domain event.
+    let started_event = engram_core::events::DomainEvent::ApplicationStarted {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        config_path: config_file.display().to_string(),
+        timestamp: engram_core::types::Timestamp::now(),
+    };
+    tracing::info!(event = %started_event.event_name(), "Domain event emitted");
+
+    // Graceful shutdown: listen for Ctrl+C and coordinate cleanup.
+    let shutdown_signal = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+        tracing::info!("Shutdown signal received (Ctrl+C)");
+    };
+
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown_signal)
+        .await?;
+
+    // === Shutdown coordination ===
+    let shutdown_start = Instant::now();
+    let uptime_secs = app_start_time.elapsed().as_secs();
+    tracing::info!("Graceful shutdown started — flushing state...");
+
+    // Emit ApplicationShutdown domain event.
+    let shutdown_event = engram_core::events::DomainEvent::ApplicationShutdown {
+        uptime_secs,
+        clean_exit: true,
+        timestamp: engram_core::types::Timestamp::now(),
+    };
+    tracing::info!(
+        event = %shutdown_event.event_name(),
+        uptime_secs,
+        "Domain event emitted"
+    );
+
+    // Signal background tasks to stop.
+    audio_active.store(false, Ordering::Relaxed);
+
+    // Flush and close with a 5-second deadline.
+    let cleanup = async {
+        // Drop the pipeline and database Arc to release connections.
+        // SQLite WAL mode ensures data is flushed on connection close.
+        drop(pipeline);
+        tracing::debug!("Ingestion pipeline released");
+
+        drop(db_arc);
+        tracing::debug!("Database connection released");
+
+        // Drop the vector index (persists to disk if configured).
+        drop(index);
+        tracing::debug!("Vector index released");
+    };
+
+    match tokio::time::timeout(std::time::Duration::from_secs(5), cleanup).await {
+        Ok(()) => {
+            let elapsed = shutdown_start.elapsed();
+            tracing::info!(elapsed_ms = elapsed.as_millis(), "Shutdown complete");
+        }
+        Err(_) => {
+            tracing::error!("Shutdown timeout exceeded (5s), forcing exit");
+            std::process::exit(1);
+        }
+    }
 
     Ok(())
 }

@@ -574,6 +574,10 @@ pub async fn update_config(
     State(state): State<AppState>,
     Json(partial): Json<serde_json::Value>,
 ) -> Result<Json<engram_core::config::EngramConfig>, ApiError> {
+    // CHECK: Reject safety field modifications before acquiring lock.
+    engram_core::config::EngramConfig::validate_update(&partial)
+        .map_err(|e| ApiError::Forbidden(format!("{}", e)))?;
+
     let mut config = state
         .config
         .lock()
@@ -1200,5 +1204,94 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // --- M1: API Hardening Tests ---
+
+    #[tokio::test]
+    async fn test_config_update_rejects_safety_field() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/config")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"safety":{"pii_detection":false}}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("forbidden"));
+    }
+
+    #[tokio::test]
+    async fn test_config_update_allows_non_safety_field() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/config")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"screen":{"capture_interval_ms":2000}}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_internal_error_sanitized() {
+        // Verify that Internal errors don't leak details to clients.
+        let err = crate::error::ApiError::Internal("secret db connection string".to_string());
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains("secret db connection string"));
+        assert!(text.contains("An internal error occurred"));
+    }
+
+    #[tokio::test]
+    async fn test_storage_error_sanitized() {
+        let err: crate::error::ApiError =
+            engram_core::error::EngramError::Storage("sqlite: disk full at /var/db".to_string()).into();
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains("sqlite"));
+        assert!(!text.contains("/var/db"));
+    }
+
+    #[tokio::test]
+    async fn test_protected_field_maps_to_forbidden() {
+        let err: crate::error::ApiError =
+            engram_core::error::EngramError::ProtectedField { field: "safety.pii_detection".to_string() }.into();
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limited_maps_to_429() {
+        let err: crate::error::ApiError =
+            engram_core::error::EngramError::RateLimited.into();
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_payload_too_large_maps_to_413() {
+        let err: crate::error::ApiError =
+            engram_core::error::EngramError::PayloadTooLarge { size: 2_000_000, limit: 1_048_576 }.into();
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

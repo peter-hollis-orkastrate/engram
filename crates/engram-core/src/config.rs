@@ -71,6 +71,20 @@ impl EngramConfig {
         }
     }
 
+    /// Validates that a config update does not modify safety-critical fields
+    pub fn validate_update(update: &serde_json::Value) -> Result<()> {
+        if let Some(obj) = update.as_object() {
+            for key in obj.keys() {
+                if SafetyConfig::is_protected_field(key) {
+                    return Err(EngramError::ProtectedField {
+                        field: key.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Save the current configuration to a TOML file.
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
@@ -360,6 +374,20 @@ pub struct SafetyConfig {
     pub ssn_redaction: bool,
     /// Custom substring patterns to deny (content containing these is blocked entirely).
     pub custom_deny_patterns: Vec<String>,
+}
+
+impl SafetyConfig {
+    /// Returns true if the given field path is safety-critical and cannot be modified via API
+    pub fn is_protected_field(field_path: &str) -> bool {
+        matches!(
+            field_path,
+            "safety"
+                | "safety.pii_detection"
+                | "safety.credit_card_redaction"
+                | "safety.ssn_redaction"
+                | "safety.custom_deny_patterns"
+        )
+    }
 }
 
 impl Default for SafetyConfig {
@@ -781,5 +809,36 @@ cold_format = "binary"
         let audio_storage = AudioFileStorageConfig::default();
         assert!(!audio_storage.save_audio);
         assert_eq!(audio_storage.format, "opus");
+    }
+
+    #[test]
+    fn test_safety_fields_protected() {
+        assert!(SafetyConfig::is_protected_field("safety"));
+        assert!(SafetyConfig::is_protected_field("safety.pii_detection"));
+        assert!(SafetyConfig::is_protected_field("safety.credit_card_redaction"));
+        assert!(SafetyConfig::is_protected_field("safety.ssn_redaction"));
+        assert!(SafetyConfig::is_protected_field("safety.custom_deny_patterns"));
+    }
+
+    #[test]
+    fn test_non_safety_fields_not_protected() {
+        assert!(!SafetyConfig::is_protected_field("screen.fps"));
+        assert!(!SafetyConfig::is_protected_field("audio.enabled"));
+        assert!(!SafetyConfig::is_protected_field("general.data_dir"));
+        assert!(!SafetyConfig::is_protected_field("storage.hot_days"));
+    }
+
+    #[test]
+    fn test_validate_update_rejects_safety() {
+        let update = serde_json::json!({ "safety": { "pii_detection": false } });
+        let result = EngramConfig::validate_update(&update);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_update_allows_non_safety() {
+        let update = serde_json::json!({ "screen": { "fps": 2.0 } });
+        let result = EngramConfig::validate_update(&update);
+        assert!(result.is_ok());
     }
 }

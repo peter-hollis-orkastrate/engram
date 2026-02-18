@@ -97,8 +97,11 @@ impl Database {
     }
 }
 
-// Database is Send because Mutex<Connection> is Send.
-// We manually verify this is safe since we always lock before access.
+// SAFETY: Database is Send+Sync because:
+// 1. The rusqlite Connection is wrapped in a std::sync::Mutex
+// 2. All database access goes through Mutex::lock(), ensuring exclusive access
+// 3. No raw pointers or unprotected shared state
+// 4. WAL mode is configured for safe concurrent reads from the OS level
 unsafe impl Send for Database {}
 unsafe impl Sync for Database {}
 

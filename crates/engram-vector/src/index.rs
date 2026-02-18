@@ -57,8 +57,11 @@ pub struct VectorIndex {
     dimensions: usize,
 }
 
-// VectorDB is Send+Sync safe, but the compiler can't verify it through the RwLock.
-// ruvector-core's VectorDB uses Arc<RwLock<..>> internally and is documented as thread-safe.
+// SAFETY: VectorIndex is Send+Sync because:
+// 1. The inner `ruvector_core::VectorDB` uses `Arc<RwLock<..>>` for all mutable state
+// 2. All public methods acquire locks before accessing shared data
+// 3. No raw pointers or thread-local state are stored
+// 4. Concurrent read access is explicitly supported by the RwLock design
 unsafe impl Send for VectorIndex {}
 unsafe impl Sync for VectorIndex {}
 

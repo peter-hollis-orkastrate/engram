@@ -3,12 +3,15 @@
 //! Configures the axum Router with CORS, tracing, compression,
 //! and all endpoint handlers.
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::compression::CompressionLayer;
 use axum::http::{header, HeaderValue, Method};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
+
+use crate::rate_limit::RateLimiter;
 
 use crate::handlers;
 use crate::state::AppState;
@@ -37,11 +40,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(handlers::health))
         .route("/ui", get(handlers::ui));
 
-    // Routes that require bearer token authentication.
-    let protected_routes = Router::new()
+    // Rate limiter: 100 requests per second.
+    let limiter = RateLimiter::new(100);
+
+    // Rate-limited protected routes.
+    let rate_limited_routes = Router::new()
         .route("/search", get(handlers::search))
         .route("/recent", get(handlers::recent))
-        .route("/stream", get(handlers::stream))
         .route("/apps", get(handlers::apps))
         .route("/apps/{name}/activity", get(handlers::app_activity))
         .route("/audio/status", get(handlers::audio_status))
@@ -51,8 +56,23 @@ pub fn create_router(state: AppState) -> Router {
         .route("/dictation/stop", post(handlers::dictation_stop))
         .route("/storage/stats", get(handlers::storage_stats))
         .route("/storage/purge", post(handlers::storage_purge))
-        .route("/config", get(handlers::get_config).put(handlers::update_config))
+        .route(
+            "/config",
+            get(handlers::get_config)
+                .put(handlers::update_config)
+                .layer(DefaultBodyLimit::max(64 * 1024)), // 64KB for config
+        )
         .route("/ingest", post(handlers::ingest))
+        .layer(axum::middleware::from_fn(crate::rate_limit::rate_limit_middleware))
+        .layer(axum::Extension(limiter));
+
+    // SSE stream exempt from rate limiting.
+    let stream_routes = Router::new()
+        .route("/stream", get(handlers::stream));
+
+    // Combine all protected routes behind auth.
+    let protected_routes = rate_limited_routes
+        .merge(stream_routes)
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_auth,
@@ -60,6 +80,7 @@ pub fn create_router(state: AppState) -> Router {
 
     public_routes
         .merge(protected_routes)
+        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1MB global limit
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(cors)

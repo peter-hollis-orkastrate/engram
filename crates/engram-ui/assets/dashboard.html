@@ -1343,6 +1343,10 @@ body {
 
   function api(path, opts) {
     opts = opts || {};
+    opts.headers = opts.headers || {};
+    if (typeof API_TOKEN !== 'undefined' && API_TOKEN) {
+      opts.headers['Authorization'] = 'Bearer ' + API_TOKEN;
+    }
     var url = API_BASE + path;
     return fetch(url, opts).then(function(r) {
       if (!r.ok) throw new Error('API error: ' + r.status);

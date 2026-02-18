@@ -830,8 +830,14 @@ pub async fn health(
 }
 
 /// GET /ui - serve the full self-contained dashboard HTML.
-pub async fn ui() -> impl IntoResponse {
-    Html(engram_ui::dashboard::DASHBOARD_HTML)
+pub async fn ui(State(state): State<AppState>) -> impl IntoResponse {
+    // Inject the API token into the dashboard HTML so JavaScript can authenticate.
+    let html = engram_ui::dashboard::DASHBOARD_HTML.replacen(
+        "var API_BASE = '';",
+        &format!("var API_BASE = '';\n  var API_TOKEN = '{}';", state.api_token),
+        1,
+    );
+    Html(html)
 }
 
 // =============================================================================

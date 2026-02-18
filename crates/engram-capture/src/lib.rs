@@ -45,7 +45,7 @@ impl MockCaptureService {
     /// Create a new mock service with default values.
     pub fn new() -> Self {
         Self {
-            app_name: "MockApp".to_string(),
+            app_name: "Unknown".to_string(),
             window_title: "Mock Window".to_string(),
             text: "Mock OCR text from screen capture".to_string(),
         }
@@ -162,7 +162,7 @@ mod tests {
         let frame = service.capture_frame().await.unwrap();
 
         assert_eq!(frame.content_type, ContentType::Screen);
-        assert_eq!(frame.app_name, "MockApp");
+        assert_eq!(frame.app_name, "Unknown");
         assert_eq!(frame.window_title, "Mock Window");
         assert!(!frame.text.is_empty());
         assert!(frame.focused);

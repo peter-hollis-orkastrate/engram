@@ -566,6 +566,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_api_token(api_token)
     .with_shared_state(Arc::clone(&audio_active), Arc::clone(&dictation_engine));
 
+    // === System Tray ===
+    let _tray = if !cli_args.headless {
+        match engram_ui::tray::TrayService::new() {
+            Ok(tray) => {
+                tracing::info!("System tray initialized");
+                Some(tray)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to create system tray — continuing without it");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // === Background tasks ===
 
     // Screen capture + OCR loop.
@@ -638,6 +654,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = config.general.port;
     let addr = format!("127.0.0.1:{}", port);
 
+    let state_for_events = state.clone();
     let router = routes::create_router(state);
 
     let listener = match tokio::net::TcpListener::bind(&addr).await {
@@ -652,12 +669,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(addr = %addr, "API server listening");
     tracing::info!("Dashboard at http://{}/ui", addr);
 
-    // Emit ApplicationStarted domain event.
+    // Emit ApplicationStarted domain event via SSE broadcast.
     let started_event = engram_core::events::DomainEvent::ApplicationStarted {
         version: env!("CARGO_PKG_VERSION").to_string(),
         config_path: config_file.display().to_string(),
         timestamp: engram_core::types::Timestamp::now(),
     };
+    state_for_events.publish_event(started_event.clone());
     tracing::info!(event = %started_event.event_name(), "Domain event emitted");
 
     // Graceful shutdown: listen for Ctrl+C and coordinate cleanup.
@@ -677,12 +695,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let uptime_secs = app_start_time.elapsed().as_secs();
     tracing::info!("Graceful shutdown started — flushing state...");
 
-    // Emit ApplicationShutdown domain event.
+    // Emit ApplicationShutdown domain event via SSE broadcast.
     let shutdown_event = engram_core::events::DomainEvent::ApplicationShutdown {
         uptime_secs,
         clean_exit: true,
         timestamp: engram_core::types::Timestamp::now(),
     };
+    state_for_events.publish_event(shutdown_event.clone());
     tracing::info!(
         event = %shutdown_event.event_name(),
         uptime_secs,

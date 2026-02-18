@@ -295,6 +295,18 @@ impl DomainEvent {
         }
     }
 
+    /// Converts the event to a JSON value suitable for SSE broadcasting.
+    ///
+    /// The output contains `event` (the event name), `timestamp` (epoch seconds),
+    /// and `data` (the full serialized event).
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "event": self.event_name(),
+            "timestamp": self.timestamp().0,
+            "data": serde_json::to_value(self).unwrap_or_default()
+        })
+    }
+
     /// Returns a human-readable event name for logging and SSE.
     pub fn event_name(&self) -> &'static str {
         match self {
@@ -1012,6 +1024,20 @@ mod tests {
             let rt: DomainEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(rt.event_name(), "frame_skipped");
         }
+    }
+
+    #[test]
+    fn test_domain_event_to_json() {
+        let ts = Timestamp::now();
+        let event = DomainEvent::ScreenCaptured {
+            frame_id: Uuid::new_v4(),
+            timestamp: ts,
+        };
+        let json = event.to_json();
+        assert_eq!(json["event"], "screen_captured");
+        assert_eq!(json["timestamp"], ts.0);
+        assert!(json["data"].is_object());
+        assert!(json["data"]["ScreenCaptured"].is_object());
     }
 
     #[test]

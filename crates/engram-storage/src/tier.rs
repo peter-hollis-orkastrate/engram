@@ -62,7 +62,7 @@ impl TierManager {
         let warm_boundary = now - (config.warm_days as i64 * 86400);
 
         let mut records_moved: usize = 0;
-        let records_deleted: usize = 0;
+        let mut records_deleted: usize = 0;
 
         // Move hot -> warm.
         db.with_conn(|conn| {
@@ -91,8 +91,39 @@ impl TierManager {
             Ok(())
         })?;
 
-        // Estimate space reclaimed (rough: text length delta from tier changes).
-        let space_reclaimed_bytes = (records_moved as u64) * 1024; // Rough estimate.
+        // Delete cold records past retention (2x warm_days as cold retention threshold).
+        let cold_retention_boundary = now - (config.warm_days as i64 * 2 * 86400);
+        db.with_conn(|conn| {
+            // Check if summaries table exists for reference protection.
+            let has_summaries: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='summaries'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+                > 0;
+
+            let deleted = if has_summaries {
+                conn.execute(
+                    "DELETE FROM captures WHERE tier = 'cold' AND timestamp < ?1
+                     AND id NOT IN (SELECT value FROM summaries, json_each(summaries.source_chunk_ids))",
+                    rusqlite::params![cold_retention_boundary],
+                )
+                .map_err(|e| EngramError::Storage(format!("Purge cold deletion failed: {}", e)))?
+            } else {
+                conn.execute(
+                    "DELETE FROM captures WHERE tier = 'cold' AND timestamp < ?1",
+                    rusqlite::params![cold_retention_boundary],
+                )
+                .map_err(|e| EngramError::Storage(format!("Purge cold deletion failed: {}", e)))?
+            };
+            records_deleted += deleted;
+            Ok(())
+        })?;
+
+        // Estimate space reclaimed from both tier moves and deletions.
+        let space_reclaimed_bytes = ((records_moved + records_deleted) as u64) * 1024;
 
         info!(
             records_moved = records_moved,
@@ -281,6 +312,61 @@ mod tests {
                 )
                 .map_err(|e| EngramError::Storage(e.to_string()))?;
             assert_eq!(tier, "hot");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn test_purge_deletes_old_cold_records() {
+        let db = Database::in_memory().unwrap();
+        // 90 days ago — well past 2x warm_days (60 days).
+        let ancient_ts = Utc::now().timestamp() - (90 * 86400);
+        // 10 days ago — should NOT be deleted (within cold retention).
+        let recent_cold_ts = Utc::now().timestamp() - (10 * 86400);
+
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, tier)
+                 VALUES ('cold-old', 'screen', ?1, 'ancient text', 'cold')",
+                rusqlite::params![ancient_ts],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, tier)
+                 VALUES ('cold-recent', 'screen', ?1, 'recent cold text', 'cold')",
+                rusqlite::params![recent_cold_ts],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+
+        let config = default_config(); // warm_days=30, so cold retention = 60 days
+        let result = TierManager::run_purge(&db, &config).unwrap();
+        assert_eq!(result.records_deleted, 1);
+        assert!(result.space_reclaimed_bytes > 0);
+
+        // Verify ancient record was deleted.
+        db.with_conn(|conn| {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM captures WHERE id = 'cold-old'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+            assert_eq!(count, 0, "Ancient cold record should be deleted");
+
+            // Recent cold record should still exist.
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM captures WHERE id = 'cold-recent'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+            assert_eq!(count, 1, "Recent cold record should remain");
             Ok(())
         })
         .unwrap();

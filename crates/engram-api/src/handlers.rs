@@ -125,7 +125,7 @@ pub struct ActivitySegment {
     pub capture_count: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AudioStatusResponse {
     pub active: bool,
     pub device_name: Option<String>,
@@ -162,6 +162,9 @@ pub struct DictationHistoryResponse {
 pub struct DictationActionResult {
     pub success: bool,
     pub message: String,
+    /// Transcribed text (present when dictation is stopped with captured audio).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -443,7 +446,7 @@ pub async fn audio_status(
         active,
         device_name: None,
         source_device: None,
-        chunks_transcribed: 0,
+        chunks_transcribed: state.chunks_transcribed.load(std::sync::atomic::Ordering::Relaxed),
         uptime_secs: uptime,
     }))
 }
@@ -532,9 +535,16 @@ pub async fn dictation_start(
         engram_core::types::DictationMode::TypeAndStore,
     ).map_err(|e| ApiError::Internal(format!("Failed to start dictation: {}", e)))?;
 
+    state.publish_event(engram_core::events::DomainEvent::DictationStarted {
+        session_id: Uuid::new_v4(),
+        mode: engram_core::types::DictationMode::TypeAndStore,
+        timestamp: engram_core::types::Timestamp::now(),
+    });
+
     Ok(Json(DictationActionResult {
         success: true,
         message: "Dictation started".to_string(),
+        text: None,
     }))
 }
 
@@ -549,17 +559,33 @@ pub async fn dictation_stop(
         return Err(ApiError::Conflict("Dictation is not active".to_string()));
     }
 
-    let text = state.dictation_engine.stop_dictation()
+    let transcribed = state.dictation_engine.stop_dictation()
         .map_err(|e| ApiError::Internal(format!("Failed to stop dictation: {}", e)))?;
 
-    let message = match text {
+    let message = match &transcribed {
         Some(t) => format!("Dictation stopped, transcribed: {}", t),
         None => "Dictation stopped, no text captured".to_string(),
     };
 
+    if let Some(ref text) = transcribed {
+        state.publish_event(engram_core::events::DomainEvent::DictationCompleted {
+            session_id: Uuid::new_v4(),
+            text: text.clone(),
+            target_app: engram_core::types::AppName("api".to_string()),
+            duration_secs: 0.0,
+            timestamp: engram_core::types::Timestamp::now(),
+        });
+    } else {
+        state.publish_event(engram_core::events::DomainEvent::DictationCancelled {
+            session_id: Uuid::new_v4(),
+            timestamp: engram_core::types::Timestamp::now(),
+        });
+    }
+
     Ok(Json(DictationActionResult {
         success: true,
         message,
+        text: transcribed,
     }))
 }
 
@@ -660,6 +686,16 @@ pub async fn update_config(
     if let Err(e) = updated.save(&state.config_path) {
         tracing::warn!(error = %e, path = %state.config_path.display(), "Failed to save config to disk");
     }
+
+    // Publish config update event.
+    let changed_sections: Vec<String> = partial
+        .as_object()
+        .map(|obj| obj.keys().cloned().collect())
+        .unwrap_or_default();
+    state.publish_event(engram_core::events::DomainEvent::ConfigUpdated {
+        changed_sections,
+        timestamp: engram_core::types::Timestamp::now(),
+    });
 
     Ok(Json(updated))
 }
@@ -1140,8 +1176,24 @@ pub async fn ingest(
         .map_err(|e| ApiError::Internal(format!("Ingest failed: {}", e)))?;
 
     let (success, id, msg) = match result {
-        engram_vector::IngestResult::Stored { id } => (true, Some(id), "Stored".to_string()),
+        engram_vector::IngestResult::Stored { id } => {
+            state.publish_event(engram_core::events::DomainEvent::TextExtracted {
+                frame_id: id,
+                app_name: engram_core::types::AppName("api".to_string()),
+                window_title: engram_core::types::WindowTitle::new("API Ingest".to_string()),
+                text_length: 0,
+                timestamp: engram_core::types::Timestamp::now(),
+            });
+            (true, Some(id), "Stored".to_string())
+        }
         engram_vector::IngestResult::Redacted { id, redaction_count } => {
+            state.publish_event(engram_core::events::DomainEvent::TextExtracted {
+                frame_id: id,
+                app_name: engram_core::types::AppName("api".to_string()),
+                window_title: engram_core::types::WindowTitle::new("API Ingest".to_string()),
+                text_length: 0,
+                timestamp: engram_core::types::Timestamp::now(),
+            });
             (true, Some(id), format!("Stored with {} PII redactions", redaction_count))
         }
         engram_vector::IngestResult::Deduplicated { similarity } => {
@@ -2082,5 +2134,80 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // --- M0 Phase 4: Deferred Infrastructure Tests ---
+
+    #[tokio::test]
+    async fn test_publish_event_no_panic() {
+        let state = make_state();
+        // Publishing with no subscribers should not panic.
+        state.publish_event(engram_core::events::DomainEvent::ApplicationStarted {
+            version: "0.1.0".to_string(),
+            config_path: "/test".to_string(),
+            timestamp: engram_core::types::Timestamp::now(),
+        });
+    }
+
+    #[tokio::test]
+    async fn test_chunks_transcribed_counter() {
+        let state = make_state();
+        assert_eq!(
+            state.chunks_transcribed.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        state
+            .chunks_transcribed
+            .fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            state.chunks_transcribed.load(std::sync::atomic::Ordering::Relaxed),
+            5
+        );
+    }
+
+    #[tokio::test]
+    async fn test_audio_status_reads_chunks_transcribed() {
+        let state = make_state();
+        state
+            .chunks_transcribed
+            .fetch_add(3, std::sync::atomic::Ordering::Relaxed);
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/audio/status")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let status: AudioStatusResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status.chunks_transcribed, 3);
+    }
+
+    #[test]
+    fn test_dictation_action_result_with_text() {
+        let result = DictationActionResult {
+            success: true,
+            message: "Dictation stopped".to_string(),
+            text: Some("Hello world".to_string()),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"text\":\"Hello world\""));
+    }
+
+    #[test]
+    fn test_dictation_action_result_without_text() {
+        let result = DictationActionResult {
+            success: true,
+            message: "Dictation started".to_string(),
+            text: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        // text field should be omitted when None due to skip_serializing_if.
+        assert!(!json.contains("\"text\""));
     }
 }

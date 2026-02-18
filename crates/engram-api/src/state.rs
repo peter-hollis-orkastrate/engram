@@ -4,7 +4,7 @@
 //! It is passed to handlers via axum's State extractor.
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -46,6 +46,8 @@ pub struct AppState {
     pub audio_active: Arc<AtomicBool>,
     /// Shared dictation engine for start/stop control.
     pub dictation_engine: Arc<DictationEngine>,
+    /// Counter for successfully transcribed audio chunks.
+    pub chunks_transcribed: Arc<AtomicU64>,
 }
 
 impl AppState {
@@ -93,6 +95,7 @@ impl AppState {
             api_token: String::new(),
             audio_active: Arc::new(AtomicBool::new(false)),
             dictation_engine: Arc::new(DictationEngine::new()),
+            chunks_transcribed: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -109,6 +112,13 @@ impl AppState {
     pub fn with_api_token(mut self, token: String) -> Self {
         self.api_token = token;
         self
+    }
+
+    /// Publish a domain event to the SSE broadcast channel.
+    ///
+    /// Errors are silently ignored (expected when there are no active subscribers).
+    pub fn publish_event(&self, event: engram_core::events::DomainEvent) {
+        let _ = self.event_tx.send(event.to_json());
     }
 
     /// Set shared audio_active flag and dictation engine.

@@ -13,6 +13,7 @@ members = [
     "crates/engram-ui",
     "crates/engram-app",
     "crates/engram-insight",
+    "crates/engram-action",
 ]
 
 [workspace.package]

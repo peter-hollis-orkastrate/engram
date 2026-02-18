@@ -51,6 +51,11 @@ pub fn run_migrations(conn: &Connection) -> Result<(), EngramError> {
         info!("Applied migration v4: insight_pipeline_tables");
     }
 
+    if current_version < 5 {
+        apply_v5(conn)?;
+        info!("Applied migration v5: action_engine_tables");
+    }
+
     Ok(())
 }
 
@@ -348,6 +353,62 @@ fn apply_v4(conn: &Connection) -> Result<(), EngramError> {
     Ok(())
 }
 
+/// Version 5: Action engine tables.
+///
+/// Creates tables for intents, tasks, and action history.
+fn apply_v5(conn: &Connection) -> Result<(), EngramError> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS intents (
+            id TEXT PRIMARY KEY,
+            intent_type TEXT NOT NULL,
+            raw_text TEXT NOT NULL,
+            extracted_action TEXT NOT NULL,
+            extracted_time TEXT,
+            confidence REAL NOT NULL,
+            source_chunk_id TEXT NOT NULL,
+            detected_at TEXT NOT NULL,
+            acted_on INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            intent_id TEXT,
+            action_type TEXT NOT NULL,
+            action_payload TEXT NOT NULL,
+            scheduled_at TEXT,
+            completed_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            source_chunk_id TEXT,
+            FOREIGN KEY (intent_id) REFERENCES intents(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS action_history (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            result TEXT NOT NULL,
+            error_message TEXT,
+            executed_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (task_id) REFERENCES tasks(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_intents_type ON intents(intent_type);
+        CREATE INDEX IF NOT EXISTS idx_intents_confidence ON intents(confidence);
+        CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+        CREATE INDEX IF NOT EXISTS idx_tasks_scheduled ON tasks(scheduled_at);
+        CREATE INDEX IF NOT EXISTS idx_action_history_task ON action_history(task_id);
+
+        INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (5, 'action_engine_tables');
+        ",
+    )
+    .map_err(|e| EngramError::Storage(format!("Failed to apply migration v5: {}", e)))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,7 +432,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
     }
 
     #[test]
@@ -734,5 +795,432 @@ mod tests {
             )
             .unwrap();
         assert_eq!(name, "vectors_metadata_and_config");
+    }
+
+    // =========================================================================
+    // V5: Action engine tables
+    // =========================================================================
+
+    #[test]
+    fn test_v5_intents_table() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at)
+             VALUES ('int-1', 'reminder', 'remind me at 3pm', 'remind at 3pm', 0.85, 'chunk-1', '2026-02-18T15:00:00')",
+            [],
+        )
+        .unwrap();
+
+        let intent_type: String = conn
+            .query_row(
+                "SELECT intent_type FROM intents WHERE id = 'int-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(intent_type, "reminder");
+
+        let confidence: f64 = conn
+            .query_row(
+                "SELECT confidence FROM intents WHERE id = 'int-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!((confidence - 0.85).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_v5_tasks_table() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        // Insert an intent first for FK.
+        conn.execute(
+            "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at)
+             VALUES ('int-2', 'task', 'do something', 'something', 0.7, 'chunk-2', '2026-02-18T10:00:00')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO tasks (id, title, status, intent_id, action_type, action_payload)
+             VALUES ('task-1', 'Do something', 'pending', 'int-2', 'quick_note', '{\"text\":\"something\"}')",
+            [],
+        )
+        .unwrap();
+
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM tasks WHERE id = 'task-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "pending");
+    }
+
+    #[test]
+    fn test_v5_action_history_table() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        // Insert task first for FK.
+        conn.execute(
+            "INSERT INTO tasks (id, title, action_type, action_payload)
+             VALUES ('task-2', 'Test task', 'reminder', '{}')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO action_history (id, task_id, action_type, result)
+             VALUES ('ah-1', 'task-2', 'reminder', 'success')",
+            [],
+        )
+        .unwrap();
+
+        let result: String = conn
+            .query_row(
+                "SELECT result FROM action_history WHERE id = 'ah-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(result, "success");
+    }
+
+    #[test]
+    fn test_v5_indexes_exist() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        let index_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN (
+                    'idx_intents_type', 'idx_intents_confidence',
+                    'idx_tasks_status', 'idx_tasks_scheduled',
+                    'idx_action_history_task'
+                )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_count, 5);
+    }
+
+    #[test]
+    fn test_v5_migration_version_recorded() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 5",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "action_engine_tables");
+    }
+
+    // =========================================================================
+    // Additional M0 migration tests
+    // =========================================================================
+
+    #[test]
+    fn test_v5_intents_update() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at)
+             VALUES ('int-u', 'reminder', 'remind me', 'remind', 0.85, 'chunk-1', '2026-02-18T15:00:00')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "UPDATE intents SET acted_on = 1, confidence = 0.95 WHERE id = 'int-u'",
+            [],
+        )
+        .unwrap();
+
+        let acted_on: i64 = conn
+            .query_row("SELECT acted_on FROM intents WHERE id = 'int-u'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(acted_on, 1);
+
+        let confidence: f64 = conn
+            .query_row("SELECT confidence FROM intents WHERE id = 'int-u'", [], |row| row.get(0))
+            .unwrap();
+        assert!((confidence - 0.95).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_v5_intents_delete() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at)
+             VALUES ('int-d', 'task', 'do thing', 'thing', 0.7, 'chunk-2', '2026-02-18T10:00:00')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute("DELETE FROM intents WHERE id = 'int-d'", []).unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM intents WHERE id = 'int-d'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_v5_intents_acted_on_default() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at)
+             VALUES ('int-def', 'note', 'a note', 'note', 0.6, 'chunk-3', '2026-02-18T12:00:00')",
+            [],
+        )
+        .unwrap();
+
+        let acted_on: i64 = conn
+            .query_row("SELECT acted_on FROM intents WHERE id = 'int-def'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(acted_on, 0);
+    }
+
+    #[test]
+    fn test_v5_intents_optional_extracted_time() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        // Insert without extracted_time (should be NULL)
+        conn.execute(
+            "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at)
+             VALUES ('int-notime', 'question', 'what is this', 'identify', 0.5, 'chunk-4', '2026-02-18T09:00:00')",
+            [],
+        )
+        .unwrap();
+
+        let time: Option<String> = conn
+            .query_row(
+                "SELECT extracted_time FROM intents WHERE id = 'int-notime'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(time.is_none());
+
+        // Insert with extracted_time
+        conn.execute(
+            "INSERT INTO intents (id, intent_type, raw_text, extracted_action, extracted_time, confidence, source_chunk_id, detected_at)
+             VALUES ('int-time', 'reminder', 'at 3pm', 'remind', '2026-02-18T15:00:00', 0.9, 'chunk-5', '2026-02-18T09:00:00')",
+            [],
+        )
+        .unwrap();
+
+        let time: Option<String> = conn
+            .query_row(
+                "SELECT extracted_time FROM intents WHERE id = 'int-time'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(time, Some("2026-02-18T15:00:00".to_string()));
+    }
+
+    #[test]
+    fn test_v5_tasks_update_status() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO tasks (id, title, status, action_type, action_payload)
+             VALUES ('task-upd', 'Update me', 'pending', 'reminder', '{}')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "UPDATE tasks SET status = 'active', scheduled_at = '2026-02-18T16:00:00' WHERE id = 'task-upd'",
+            [],
+        )
+        .unwrap();
+
+        let status: String = conn
+            .query_row("SELECT status FROM tasks WHERE id = 'task-upd'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(status, "active");
+    }
+
+    #[test]
+    fn test_v5_tasks_complete_lifecycle() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO tasks (id, title, status, action_type, action_payload)
+             VALUES ('task-lc', 'Lifecycle', 'detected', 'notification', '{}')",
+            [],
+        )
+        .unwrap();
+
+        // detected -> pending -> active -> done
+        conn.execute("UPDATE tasks SET status = 'pending' WHERE id = 'task-lc'", []).unwrap();
+        conn.execute("UPDATE tasks SET status = 'active' WHERE id = 'task-lc'", []).unwrap();
+        conn.execute(
+            "UPDATE tasks SET status = 'done', completed_at = '2026-02-18T17:00:00' WHERE id = 'task-lc'",
+            [],
+        )
+        .unwrap();
+
+        let status: String = conn
+            .query_row("SELECT status FROM tasks WHERE id = 'task-lc'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(status, "done");
+
+        let completed: Option<String> = conn
+            .query_row(
+                "SELECT completed_at FROM tasks WHERE id = 'task-lc'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(completed, Some("2026-02-18T17:00:00".to_string()));
+    }
+
+    #[test]
+    fn test_v5_action_history_with_error_message() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO tasks (id, title, action_type, action_payload)
+             VALUES ('task-err', 'Failing task', 'shell_command', '{\"cmd\":\"rm -rf\"}')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO action_history (id, task_id, action_type, result, error_message)
+             VALUES ('ah-err', 'task-err', 'shell_command', 'failed', 'permission denied')",
+            [],
+        )
+        .unwrap();
+
+        let error: Option<String> = conn
+            .query_row(
+                "SELECT error_message FROM action_history WHERE id = 'ah-err'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(error, Some("permission denied".to_string()));
+    }
+
+    #[test]
+    fn test_v5_action_history_multiple_per_task() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO tasks (id, title, action_type, action_payload)
+             VALUES ('task-multi', 'Retried task', 'notification', '{}')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO action_history (id, task_id, action_type, result, error_message)
+             VALUES ('ah-1', 'task-multi', 'notification', 'failed', 'timeout')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO action_history (id, task_id, action_type, result)
+             VALUES ('ah-2', 'task-multi', 'notification', 'success')",
+            [],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM action_history WHERE task_id = 'task-multi'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_v5_migration_idempotent() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+        // Run again -- must not fail
+        run_migrations(&conn).unwrap();
+
+        // Insert data after double migration to confirm tables still work
+        conn.execute(
+            "INSERT INTO intents (id, intent_type, raw_text, extracted_action, confidence, source_chunk_id, detected_at)
+             VALUES ('int-idem', 'command', 'open terminal', 'open', 0.88, 'chunk-i', '2026-02-18T14:00:00')",
+            [],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM intents WHERE id = 'int-idem'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_v5_tasks_default_status() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO tasks (id, title, action_type, action_payload)
+             VALUES ('task-def', 'Default status', 'clipboard', '{}')",
+            [],
+        )
+        .unwrap();
+
+        let status: String = conn
+            .query_row("SELECT status FROM tasks WHERE id = 'task-def'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(status, "pending");
+    }
+
+    #[test]
+    fn test_all_five_migrations_applied() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 5);
+
+        let versions: Vec<i64> = (1..=5).collect();
+        for v in versions {
+            let name: String = conn
+                .query_row(
+                    "SELECT name FROM schema_migrations WHERE version = ?1",
+                    [v],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(!name.is_empty(), "Migration v{} should have a name", v);
+        }
     }
 }

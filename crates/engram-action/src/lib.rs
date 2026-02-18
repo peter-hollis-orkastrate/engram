@@ -12,7 +12,11 @@ pub mod scheduler;
 pub mod task;
 pub mod types;
 
+pub use confirmation::{ConfirmationGate, NotificationRateLimiter};
 pub use error::{ActionError, IntentError, SchedulerError, TaskError};
+pub use handler::{ActionHandler, ActionRegistry};
+pub use orchestrator::Orchestrator;
+pub use scheduler::Scheduler;
 pub use types::{
     ActionConfig, ActionHistoryRecord, ActionPayload, ActionResult, ActionType,
     AutoApproveConfig, Intent, IntentType, SafetyLevel, Task, TaskStatus,

@@ -222,19 +222,11 @@ mod tests {
 
         engine
             .index()
-            .insert(
-                id1,
-                vec1,
-                serde_json::json!({"content_type": "screen"}),
-            )
+            .insert(id1, vec1, serde_json::json!({"content_type": "screen"}))
             .unwrap();
         engine
             .index()
-            .insert(
-                id2,
-                vec2,
-                serde_json::json!({"content_type": "audio"}),
-            )
+            .insert(id2, vec2, serde_json::json!({"content_type": "audio"}))
             .unwrap();
 
         let filters = SearchFilters {
@@ -248,7 +240,9 @@ mod tests {
             .unwrap();
 
         // Only the screen entry should match.
-        assert!(results.iter().all(|r| r.content_type.as_deref() == Some("screen")));
+        assert!(results
+            .iter()
+            .all(|r| r.content_type.as_deref() == Some("screen")));
     }
 
     #[tokio::test]

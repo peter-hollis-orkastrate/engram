@@ -110,7 +110,10 @@ async fn audio_capture_loop(
         return;
     }
 
-    tracing::info!(chunk_duration_secs = chunk_secs, "Audio capture loop started");
+    tracing::info!(
+        chunk_duration_secs = chunk_secs,
+        "Audio capture loop started"
+    );
 
     #[cfg(not(target_os = "windows"))]
     {
@@ -121,11 +124,11 @@ async fn audio_capture_loop(
     #[cfg(target_os = "windows")]
     {
         use engram_audio::{
-            AudioCaptureService, AudioConfig as WinAudioConfig, VoiceActivityDetector,
-            WindowsAudioService, SileroVad, SileroVadConfig, VadResult,
+            AudioCaptureService, AudioConfig as WinAudioConfig, SileroVad, SileroVadConfig,
+            VadResult, VoiceActivityDetector, WindowsAudioService,
         };
-        use engram_whisper::{TranscriptionService, WhisperConfig};
         use engram_whisper::whisper_service::WhisperService;
+        use engram_whisper::{TranscriptionService, WhisperConfig};
 
         let audio_service = WindowsAudioService::new(WinAudioConfig::default());
 
@@ -256,8 +259,8 @@ async fn dictation_listener(
 
     #[cfg(target_os = "windows")]
     {
-        use engram_dictation::{HotkeyConfig, HotkeyService, TextInjector};
         use engram_core::types::{ContentType, DictationEntry, DictationMode};
+        use engram_dictation::{HotkeyConfig, HotkeyService, TextInjector};
 
         let text_injector = TextInjector::new();
 
@@ -414,10 +417,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // If --config was explicitly provided, the file must exist.
     if cli_args.config.is_some() && !config_file.exists() {
-        eprintln!(
-            "Error: config file not found: {}",
-            config_file.display()
-        );
+        eprintln!("Error: config file not found: {}", config_file.display());
         std::process::exit(1);
     }
 
@@ -540,7 +540,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(result.text)
                     });
                 tracing::info!("Dictation engine initialized with Whisper transcription");
-                Arc::new(engram_dictation::DictationEngine::with_transcription(transcription_fn))
+                Arc::new(engram_dictation::DictationEngine::with_transcription(
+                    transcription_fn,
+                ))
             }
             Err(e) => {
                 tracing::warn!(
@@ -591,7 +593,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build CaptureConfig from the loaded TOML config.
     let screenshot_dir = if config.screen.save_screenshots {
         // Resolve data_dir (expand ~ to home).
-        let base = if config.general.data_dir.starts_with("~/") || config.general.data_dir.starts_with("~\\") {
+        let base = if config.general.data_dir.starts_with("~/")
+            || config.general.data_dir.starts_with("~\\")
+        {
             #[cfg(target_os = "windows")]
             let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
             #[cfg(not(target_os = "windows"))]
@@ -638,7 +642,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audio_chunk_secs = config.audio.chunk_duration_secs as u64;
     let audio_active_clone = Arc::clone(&audio_active);
     tokio::spawn(async move {
-        audio_capture_loop(pipeline_audio, audio_enabled, audio_chunk_secs, audio_active_clone).await;
+        audio_capture_loop(
+            pipeline_audio,
+            audio_enabled,
+            audio_chunk_secs,
+            audio_active_clone,
+        )
+        .await;
     });
 
     // Dictation hotkey listener.

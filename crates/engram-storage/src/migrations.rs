@@ -610,11 +610,9 @@ mod tests {
         .unwrap();
 
         let value: String = conn
-            .query_row(
-                "SELECT value FROM entities WHERE id = 'ent-1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT value FROM entities WHERE id = 'ent-1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(value, "Alice Smith");
 

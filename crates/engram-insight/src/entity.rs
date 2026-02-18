@@ -235,7 +235,11 @@ mod tests {
             .iter()
             .filter(|e| e.entity_type == EntityType::Money)
             .collect();
-        assert!(money.len() >= 2, "Expected at least 2 money entities, got {}", money.len());
+        assert!(
+            money.len() >= 2,
+            "Expected at least 2 money entities, got {}",
+            money.len()
+        );
         assert!((money[0].confidence - 0.95).abs() < f32::EPSILON);
     }
 

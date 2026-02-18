@@ -123,8 +123,8 @@ fn rank_sentences<'a>(sentences: &[(usize, &'a str)], top_k: usize) -> Vec<&'a s
 /// Generate a title from the most frequent meaningful bigram.
 fn generate_title(sentences: &[(usize, &str)]) -> String {
     let stopwords = [
-        "the", "a", "an", "is", "was", "are", "were", "to", "of", "in", "for", "on", "with",
-        "and", "or", "but", "not", "it", "this", "that",
+        "the", "a", "an", "is", "was", "are", "were", "to", "of", "in", "for", "on", "with", "and",
+        "or", "but", "not", "it", "this", "that",
     ];
     let mut bigram_counts: HashMap<(String, String), usize> = HashMap::new();
 
@@ -170,7 +170,8 @@ mod tests {
         let id1 = Uuid::new_v4();
         let id2 = Uuid::new_v4();
         let id3 = Uuid::new_v4();
-        let chunks: Vec<(Uuid, &str)> = vec![
+        let chunks: Vec<(Uuid, &str)> =
+            vec![
             (id1, "The team discussed the new authentication system. It needs JWT support."),
             (id2, "Authentication tokens should expire after 24 hours. Refresh tokens are needed."),
             (id3, "The security review of the authentication system is scheduled for next week."),

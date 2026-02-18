@@ -44,7 +44,9 @@ pub trait DynEmbeddingService: Send + Sync {
     fn embed_boxed<'a>(
         &'a self,
         text: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<f32>, EngramError>> + Send + 'a>>;
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<f32>, EngramError>> + Send + 'a>,
+    >;
 
     /// Return the dimensionality of vectors produced by this service.
     fn dimensions(&self) -> usize;
@@ -55,7 +57,9 @@ impl<T: EmbeddingService> DynEmbeddingService for T {
     fn embed_boxed<'a>(
         &'a self,
         text: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<f32>, EngramError>> + Send + 'a>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<f32>, EngramError>> + Send + 'a>,
+    > {
         Box::pin(self.embed(text))
     }
 
@@ -142,9 +146,8 @@ impl OnnxEmbeddingService {
             .map(|d| if d > 0 { d as usize } else { 384 })
             .unwrap_or(384);
 
-        let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(|e| {
-            EngramError::Storage(format!("Failed to load tokenizer: {}", e))
-        })?;
+        let tokenizer = Tokenizer::from_file(tokenizer_path)
+            .map_err(|e| EngramError::Storage(format!("Failed to load tokenizer: {}", e)))?;
 
         info!(
             model = %model_path.display(),
@@ -176,27 +179,17 @@ impl OnnxEmbeddingService {
             .iter()
             .map(|&m| m as i64)
             .collect();
-        let token_type_ids: Vec<i64> = encoding
-            .get_type_ids()
-            .iter()
-            .map(|&t| t as i64)
-            .collect();
+        let token_type_ids: Vec<i64> = encoding.get_type_ids().iter().map(|&t| t as i64).collect();
 
         let seq_len = input_ids.len();
 
         // Create ndarray views with shape [1, seq_len] for batch size 1.
-        let ids_array =
-            ndarray::Array2::from_shape_vec((1, seq_len), input_ids).map_err(|e| {
-                EngramError::Storage(format!("input_ids array: {}", e))
-            })?;
-        let mask_array =
-            ndarray::Array2::from_shape_vec((1, seq_len), attention_mask.clone()).map_err(|e| {
-                EngramError::Storage(format!("attention_mask array: {}", e))
-            })?;
-        let type_array =
-            ndarray::Array2::from_shape_vec((1, seq_len), token_type_ids).map_err(|e| {
-                EngramError::Storage(format!("token_type_ids array: {}", e))
-            })?;
+        let ids_array = ndarray::Array2::from_shape_vec((1, seq_len), input_ids)
+            .map_err(|e| EngramError::Storage(format!("input_ids array: {}", e)))?;
+        let mask_array = ndarray::Array2::from_shape_vec((1, seq_len), attention_mask.clone())
+            .map_err(|e| EngramError::Storage(format!("attention_mask array: {}", e)))?;
+        let type_array = ndarray::Array2::from_shape_vec((1, seq_len), token_type_ids)
+            .map_err(|e| EngramError::Storage(format!("token_type_ids array: {}", e)))?;
 
         let ids_ref = TensorRef::from_array_view(&ids_array)
             .map_err(|e| EngramError::Storage(format!("TensorRef input_ids: {}", e)))?;
@@ -333,9 +326,7 @@ impl MockEmbedding {
 impl EmbeddingService for MockEmbedding {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, EngramError> {
         if text.is_empty() {
-            return Err(EngramError::Storage(
-                "Cannot embed empty text".to_string(),
-            ));
+            return Err(EngramError::Storage("Cannot embed empty text".to_string()));
         }
         Ok(Self::hash_to_vector(text))
     }

@@ -102,8 +102,7 @@ impl VectorIndex {
     /// Uses a unique temp file for REDB storage. The file is cleaned up when
     /// the OS reclaims temp space (or on explicit drop if desired).
     pub fn with_dimensions(dimensions: usize) -> Self {
-        let temp_path = std::env::temp_dir()
-            .join(format!("engram_vector_{}.db", Uuid::new_v4()));
+        let temp_path = std::env::temp_dir().join(format!("engram_vector_{}.db", Uuid::new_v4()));
         let options = DbOptions {
             dimensions,
             distance_metric: DistanceMetric::Euclidean,
@@ -179,7 +178,8 @@ impl VectorIndex {
 
         // Convert metadata Value to HashMap<String, serde_json::Value> for ruvector
         let rv_metadata = if let Value::Object(map) = &metadata {
-            let hm: HashMap<String, Value> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let hm: HashMap<String, Value> =
+                map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             Some(hm)
         } else {
             None
@@ -198,9 +198,7 @@ impl VectorIndex {
 
         // Wrap in catch_unwind to prevent hnsw_rs assertion panics from
         // killing the tokio worker thread (e.g., `assert!(c.dist_to_ref <= 0.)`).
-        let insert_result = panic::catch_unwind(AssertUnwindSafe(|| {
-            db.insert(entry)
-        }));
+        let insert_result = panic::catch_unwind(AssertUnwindSafe(|| db.insert(entry)));
 
         drop(db);
 
@@ -269,9 +267,7 @@ impl VectorIndex {
         };
 
         // Wrap in catch_unwind to prevent hnsw_rs assertion panics.
-        let search_result = panic::catch_unwind(AssertUnwindSafe(|| {
-            db.search(search_query)
-        }));
+        let search_result = panic::catch_unwind(AssertUnwindSafe(|| db.search(search_query)));
 
         drop(db);
 
@@ -322,7 +318,11 @@ impl VectorIndex {
             .collect();
 
         // Sort by descending similarity.
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         Ok(hits)
     }
@@ -407,7 +407,11 @@ mod tests {
 
         assert_eq!(hits.len(), 2);
         // Both should have high similarity (close to 1.0).
-        assert!(hits[0].score > 0.9, "Expected high similarity, got {}", hits[0].score);
+        assert!(
+            hits[0].score > 0.9,
+            "Expected high similarity, got {}",
+            hits[0].score
+        );
     }
 
     #[test]
@@ -463,7 +467,9 @@ mod tests {
 
         // Vector further from the query (orthogonal-ish, avoids exact-opposite
         // floating-point edge case in cosine distance).
-        let far_vec: Vec<f32> = (0..384).map(|i| if i % 2 == 0 { 0.1 } else { -0.9 }).collect();
+        let far_vec: Vec<f32> = (0..384)
+            .map(|i| if i % 2 == 0 { 0.1 } else { -0.9 })
+            .collect();
         index
             .insert(far_id, far_vec, serde_json::json!({}))
             .unwrap();
@@ -523,7 +529,11 @@ mod tests {
                 .insert(id1, vec![1.0f32; 384], serde_json::json!({"app": "chrome"}))
                 .unwrap();
             index
-                .insert(id2, vec![-1.0f32; 384], serde_json::json!({"app": "firefox"}))
+                .insert(
+                    id2,
+                    vec![-1.0f32; 384],
+                    serde_json::json!({"app": "firefox"}),
+                )
                 .unwrap();
             assert_eq!(index.len(), 2);
         }
@@ -535,7 +545,10 @@ mod tests {
 
             // Search should find vectors from disk.
             let hits = index.search(&vec![1.0f32; 384], 5).unwrap();
-            assert!(!hits.is_empty(), "Search should return results after reload");
+            assert!(
+                !hits.is_empty(),
+                "Search should return results after reload"
+            );
         }
     }
 

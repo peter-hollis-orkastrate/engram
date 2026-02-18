@@ -10,6 +10,7 @@ engram-vector = { path = "../engram-vector" }
 engram-storage = { path = "../engram-storage" }
 engram-ui = { path = "../engram-ui" }
 engram-dictation = { path = "../engram-dictation" }
+engram-insight = { path = "../engram-insight" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

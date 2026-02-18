@@ -196,7 +196,9 @@ mod tests {
         assert_eq!(auth_cluster.summary_ids.len(), 2);
         let label_lower = auth_cluster.label.to_lowercase();
         assert!(
-            label_lower.contains("authentication") || label_lower.contains("review") || label_lower.contains("security"),
+            label_lower.contains("authentication")
+                || label_lower.contains("review")
+                || label_lower.contains("security"),
             "Cluster label should contain a shared term, got: {}",
             auth_cluster.label
         );

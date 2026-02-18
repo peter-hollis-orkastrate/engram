@@ -56,11 +56,7 @@ pub fn load_or_generate_token(token_path: &std::path::Path) -> String {
 ///
 /// Extracts the token from `Authorization: Bearer <token>` and compares
 /// against `AppState.api_token`. Returns 401 if missing or invalid.
-pub async fn require_auth(
-    State(state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn require_auth(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let auth_header = req.headers().get("authorization");
 
     match auth_header {

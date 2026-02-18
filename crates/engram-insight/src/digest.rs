@@ -22,14 +22,13 @@ impl DigestGenerator {
         entities: &[Entity],
         total_chunks: u32,
     ) -> DailyDigest {
-        let app_breakdown: HashMap<String, usize> =
-            summaries
-                .iter()
-                .filter_map(|s| s.source_app.as_ref())
-                .fold(HashMap::new(), |mut acc, app| {
-                    *acc.entry(app.clone()).or_insert(0) += 1;
-                    acc
-                });
+        let app_breakdown: HashMap<String, usize> = summaries
+            .iter()
+            .filter_map(|s| s.source_app.as_ref())
+            .fold(HashMap::new(), |mut acc, app| {
+                *acc.entry(app.clone()).or_insert(0) += 1;
+                acc
+            });
 
         let top_entities: Vec<serde_json::Value> = {
             let mut freq: HashMap<(String, String), usize> = HashMap::new();

@@ -171,14 +171,8 @@ impl crate::VoiceActivityDetector for SileroVad {
         };
 
         let sr_array = ndarray::Array1::from_vec(vec![sr]);
-        let h_array = ndarray::Array3::from_shape_vec(
-            (2, 1, state.state_dim),
-            state.h.clone(),
-        );
-        let c_array = ndarray::Array3::from_shape_vec(
-            (2, 1, state.state_dim),
-            state.c.clone(),
-        );
+        let h_array = ndarray::Array3::from_shape_vec((2, 1, state.state_dim), state.h.clone());
+        let c_array = ndarray::Array3::from_shape_vec((2, 1, state.state_dim), state.c.clone());
 
         let (h_array, c_array) = match (h_array, c_array) {
             (Ok(h), Ok(c)) => (h, c),

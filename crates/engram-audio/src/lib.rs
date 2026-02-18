@@ -191,10 +191,7 @@ impl MockAudioChunkProcessor {
 }
 
 impl AudioChunkProcessor for MockAudioChunkProcessor {
-    async fn process_chunk(
-        &self,
-        audio_data: &[u8],
-    ) -> Result<Option<AudioChunk>, EngramError> {
+    async fn process_chunk(&self, audio_data: &[u8]) -> Result<Option<AudioChunk>, EngramError> {
         if audio_data.is_empty() {
             return Ok(None);
         }

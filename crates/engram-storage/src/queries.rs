@@ -59,7 +59,7 @@ pub struct DbStats {
 pub struct SummaryRow {
     pub id: Uuid,
     pub title: String,
-    pub bullet_points: String, // JSON array string
+    pub bullet_points: String,    // JSON array string
     pub source_chunk_ids: String, // JSON array string
     pub source_app: Option<String>,
     pub time_range_start: Option<String>,
@@ -157,9 +157,7 @@ impl QueryService {
                 .map_err(|e| EngramError::Storage(format!("Recent query prepare: {}", e)))?;
 
             let rows = stmt
-                .query_map(params_refs.as_slice(), |row| {
-                    Ok(map_capture_row(row))
-                })
+                .query_map(params_refs.as_slice(), |row| Ok(map_capture_row(row)))
                 .map_err(|e| EngramError::Storage(format!("Recent query: {}", e)))?;
 
             let mut results = Vec::new();
@@ -200,10 +198,7 @@ impl QueryService {
                 apps.push(AppSummary {
                     name,
                     capture_count: count as u64,
-                    last_seen: Utc
-                        .timestamp_opt(last_ts, 0)
-                        .single()
-                        .unwrap_or_default(),
+                    last_seen: Utc.timestamp_opt(last_ts, 0).single().unwrap_or_default(),
                 });
             }
             Ok(apps)
@@ -242,8 +237,7 @@ impl QueryService {
 
             let mut segments = Vec::new();
             for row in rows {
-                let (count, start, end) =
-                    row.map_err(|e| EngramError::Storage(e.to_string()))?;
+                let (count, start, end) = row.map_err(|e| EngramError::Storage(e.to_string()))?;
                 segments.push(ActivitySegment {
                     start: Utc.timestamp_opt(start, 0).single().unwrap_or_default(),
                     end: Utc.timestamp_opt(end, 0).single().unwrap_or_default(),
@@ -588,24 +582,26 @@ impl QueryService {
     /// Get topic clusters, optionally filtered by creation date.
     pub fn get_clusters(&self, since: Option<&str>) -> Result<Vec<ClusterRow>, EngramError> {
         self.db.with_conn(|conn| {
-            let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(s) = since {
-                (
-                    "SELECT id, label, summary_ids, centroid_embedding, created_at
+            let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                if let Some(s) = since {
+                    (
+                        "SELECT id, label, summary_ids, centroid_embedding, created_at
                      FROM topic_clusters WHERE created_at >= ?1 ORDER BY created_at DESC",
-                    vec![Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>],
-                )
-            } else {
-                (
-                    "SELECT id, label, summary_ids, centroid_embedding, created_at
+                        vec![Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>],
+                    )
+                } else {
+                    (
+                        "SELECT id, label, summary_ids, centroid_embedding, created_at
                      FROM topic_clusters ORDER BY created_at DESC",
-                    vec![],
-                )
-            };
+                        vec![],
+                    )
+                };
 
             let params_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params_vec.iter().map(|p| p.as_ref()).collect();
 
-            let mut stmt = conn.prepare(sql)
+            let mut stmt = conn
+                .prepare(sql)
                 .map_err(|e| EngramError::Storage(format!("Get clusters prepare: {}", e)))?;
 
             let rows = stmt
@@ -885,11 +881,25 @@ mod tests {
         let qs = QueryService::new(db);
 
         qs.store_summary(
-            &Uuid::new_v4().to_string(), "S1", "[]", "[]", Some("Chrome"), None, None,
-        ).unwrap();
+            &Uuid::new_v4().to_string(),
+            "S1",
+            "[]",
+            "[]",
+            Some("Chrome"),
+            None,
+            None,
+        )
+        .unwrap();
         qs.store_summary(
-            &Uuid::new_v4().to_string(), "S2", "[]", "[]", Some("Teams"), None, None,
-        ).unwrap();
+            &Uuid::new_v4().to_string(),
+            "S2",
+            "[]",
+            "[]",
+            Some("Teams"),
+            None,
+            None,
+        )
+        .unwrap();
 
         let chrome = qs.get_summaries(None, Some("Chrome"), None).unwrap();
         assert_eq!(chrome.len(), 1);
@@ -926,11 +936,23 @@ mod tests {
         let qs = QueryService::new(db);
 
         qs.store_entity(
-            &Uuid::new_v4().to_string(), "person", "Alice", Some("c1"), None, 0.9,
-        ).unwrap();
+            &Uuid::new_v4().to_string(),
+            "person",
+            "Alice",
+            Some("c1"),
+            None,
+            0.9,
+        )
+        .unwrap();
         qs.store_entity(
-            &Uuid::new_v4().to_string(), "url", "https://example.com", Some("c2"), None, 1.0,
-        ).unwrap();
+            &Uuid::new_v4().to_string(),
+            "url",
+            "https://example.com",
+            Some("c2"),
+            None,
+            1.0,
+        )
+        .unwrap();
 
         let people = qs.get_entities(Some("person"), None, None).unwrap();
         assert_eq!(people.len(), 1);

@@ -118,14 +118,14 @@ Config file at `~/.engram/config.toml` (auto-created on install). Priority: CLI 
 
 ### Upcoming Phases (PRDs Ready)
 
-| Phase | Name | Focus |
-|-------|------|-------|
-| **Phase 4** | Intelligent Summarization & Insight Extraction | Auto-summarization of captured content, pattern detection, insight generation |
-| **Phase 5** | Local Action Engine | Automated actions triggered by captured context, local command execution |
-| **Phase 6** | Conversational Interface | Natural language queries over your memory, chat-based interaction |
-| **Phase 7** | Workflow Automation & Integration | Third-party app integration, automated workflows triggered by context |
-| **Phase 8** | Ambient Intelligence & Proactive Assistant | Proactive suggestions, context-aware notifications, anticipatory assistance |
-| **Phase 9** | Cross-Device Sync (Privacy-Preserving) | Encrypted sync across devices, federated search, zero-knowledge architecture |
+| Phase | Focus |
+|-------|-------|
+| **Phase 4: Intelligent Summarization & Insight Extraction** | Auto-summarization of captured content, pattern detection, insight generation |
+| **Phase 5: Local Action Engine** | Automated actions triggered by captured context, local command execution |
+| **Phase 6: Conversational Interface** | Natural language queries over your memory, chat-based interaction |
+| **Phase 7: Workflow Automation & Integration** | Third-party app integration, automated workflows triggered by context |
+| **Phase 8: Ambient Intelligence & Proactive Assistant** | Proactive suggestions, context-aware notifications, anticipatory assistance |
+| **Phase 9: Cross-Device Sync (Privacy-Preserving)** | Encrypted sync across devices, federated search, zero-knowledge architecture |
 
 Each phase has a full PRD in `docs/features/`.
 

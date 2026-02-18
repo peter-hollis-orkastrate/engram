@@ -58,7 +58,13 @@ impl AppState {
         database: Database,
         pipeline: EngramPipeline,
     ) -> Self {
-        Self::with_config_path(config, vector_index, database, pipeline, PathBuf::from("config.toml"))
+        Self::with_config_path(
+            config,
+            vector_index,
+            database,
+            pipeline,
+            PathBuf::from("config.toml"),
+        )
     }
 
     /// Create a new AppState with a specific config file path.

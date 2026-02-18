@@ -64,7 +64,7 @@ pub struct Entity {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DailyDigest {
     pub id: Uuid,
-    pub digest_date: String, // YYYY-MM-DD
+    pub digest_date: String,        // YYYY-MM-DD
     pub content: serde_json::Value, // full digest JSON
     pub summary_count: u32,
     pub entity_count: u32,

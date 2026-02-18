@@ -47,17 +47,11 @@ impl HotkeyService {
         })?;
 
         let hotkey = HotKey::from_str(&config.key).map_err(|e| {
-            EngramError::Dictation(format!(
-                "Failed to parse hotkey '{}': {}",
-                config.key, e
-            ))
+            EngramError::Dictation(format!("Failed to parse hotkey '{}': {}", config.key, e))
         })?;
 
         manager.register(hotkey).map_err(|e| {
-            EngramError::Dictation(format!(
-                "Failed to register hotkey '{}': {}",
-                config.key, e
-            ))
+            EngramError::Dictation(format!("Failed to register hotkey '{}': {}", config.key, e))
         })?;
 
         tracing::info!(key = %config.key, "Global hotkey registered");

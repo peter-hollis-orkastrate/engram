@@ -12,12 +12,12 @@ use serde_json::Value;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use engram_api::create_router;
 use engram_api::handlers::{
     AppsResponse, AudioDeviceResponse, HealthResponse, PaginatedResults, PurgeDryRunResponse,
     SearchResponse, StorageStatsResponse,
 };
 use engram_api::state::AppState;
-use engram_api::create_router;
 use engram_core::config::{EngramConfig, SafetyConfig};
 use engram_storage::Database;
 use engram_vector::embedding::MockEmbedding;
@@ -294,7 +294,11 @@ async fn test_auth_required_on_all_protected_endpoints() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "Expected 401 for PUT /config");
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "Expected 401 for PUT /config"
+    );
 
     // POST /storage/purge/dry-run
     let app = make_app();
@@ -490,10 +494,7 @@ async fn test_app_activity_nonexistent_app() {
 #[tokio::test]
 async fn test_app_activity_empty_name() {
     let app = make_app();
-    let resp = app
-        .oneshot(authed_get("/apps//activity"))
-        .await
-        .unwrap();
+    let resp = app.oneshot(authed_get("/apps//activity")).await.unwrap();
 
     // Empty name may return 400, 404, or 401 depending on routing.
     let status = resp.status();
@@ -564,10 +565,7 @@ async fn test_audio_device_when_active() {
 #[tokio::test]
 async fn test_dictation_status_happy_path() {
     let app = make_app();
-    let resp = app
-        .oneshot(authed_get("/dictation/status"))
-        .await
-        .unwrap();
+    let resp = app.oneshot(authed_get("/dictation/status")).await.unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = body_bytes(resp).await;
@@ -583,10 +581,7 @@ async fn test_dictation_status_happy_path() {
 #[tokio::test]
 async fn test_dictation_history_happy_path_empty() {
     let app = make_app();
-    let resp = app
-        .oneshot(authed_get("/dictation/history"))
-        .await
-        .unwrap();
+    let resp = app.oneshot(authed_get("/dictation/history")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -896,10 +891,7 @@ async fn test_search_semantic_happy_path_empty() {
 #[tokio::test]
 async fn test_search_semantic_missing_q_returns_400() {
     let app = make_app();
-    let resp = app
-        .oneshot(authed_get("/search/semantic"))
-        .await
-        .unwrap();
+    let resp = app.oneshot(authed_get("/search/semantic")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -936,10 +928,7 @@ async fn test_search_hybrid_happy_path_empty() {
 #[tokio::test]
 async fn test_search_hybrid_missing_q_returns_400() {
     let app = make_app();
-    let resp = app
-        .oneshot(authed_get("/search/hybrid"))
-        .await
-        .unwrap();
+    let resp = app.oneshot(authed_get("/search/hybrid")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -965,10 +954,7 @@ async fn test_search_raw_happy_path_empty() {
 #[tokio::test]
 async fn test_search_raw_missing_q_returns_400() {
     let app = make_app();
-    let resp = app
-        .oneshot(authed_get("/search/raw"))
-        .await
-        .unwrap();
+    let resp = app.oneshot(authed_get("/search/raw")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -1132,8 +1118,7 @@ async fn test_error_internal_sanitizes_details() {
 #[tokio::test]
 async fn test_error_storage_sanitizes_details() {
     let err: engram_api::ApiError =
-        engram_core::error::EngramError::Storage("sqlite: disk full at /var/db".to_string())
-            .into();
+        engram_core::error::EngramError::Storage("sqlite: disk full at /var/db".to_string()).into();
     let resp = axum::response::IntoResponse::into_response(err);
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 

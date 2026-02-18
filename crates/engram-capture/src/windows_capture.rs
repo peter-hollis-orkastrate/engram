@@ -11,10 +11,10 @@ use std::path::PathBuf;
 
 #[cfg(target_os = "windows")]
 use chrono::Utc;
-#[cfg(not(target_os = "windows"))]
-use tracing::warn;
 #[cfg(target_os = "windows")]
 use tracing::debug;
+#[cfg(not(target_os = "windows"))]
+use tracing::warn;
 #[cfg(target_os = "windows")]
 use uuid::Uuid;
 
@@ -140,9 +140,7 @@ pub fn enumerate_monitors() -> Vec<MonitorInfo> {
 #[cfg(target_os = "windows")]
 pub fn enumerate_monitors() -> Vec<MonitorInfo> {
     use std::sync::Mutex;
-    use windows_sys::Win32::Graphics::Gdi::{
-        EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW,
-    };
+    use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW};
     use windows_sys::Win32::UI::HiDpi::GetDpiForMonitor;
 
     // Accumulate monitors via the callback.
@@ -169,7 +167,11 @@ pub fn enumerate_monitors() -> Vec<MonitorInfo> {
             let is_primary = (info.monitorInfo.dwFlags & 1) != 0; // MONITORINFOF_PRIMARY
 
             let name = String::from_utf16_lossy(
-                &info.szDevice[..info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len())],
+                &info.szDevice[..info
+                    .szDevice
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(info.szDevice.len())],
             );
 
             // Query real DPI for this monitor via GetDpiForMonitor.
@@ -708,8 +710,7 @@ mod tests {
 
     #[test]
     fn test_monitor_selector_empty() {
-        let mut selector =
-            MonitorSelector::new(Vec::new(), MonitorSelectionMode::RoundRobin);
+        let mut selector = MonitorSelector::new(Vec::new(), MonitorSelectionMode::RoundRobin);
         assert!(selector.next().is_none());
     }
 }

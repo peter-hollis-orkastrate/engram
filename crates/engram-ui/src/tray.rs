@@ -69,9 +69,8 @@ impl TrayService {
 
         // Create a simple 16x16 grey icon (RGBA).
         let icon_data = create_icon_rgba(128, 128, 128, 255); // Grey for idle
-        let icon = Icon::from_rgba(icon_data, 16, 16).map_err(|e| {
-            EngramError::Config(format!("Failed to create tray icon: {}", e))
-        })?;
+        let icon = Icon::from_rgba(icon_data, 16, 16)
+            .map_err(|e| EngramError::Config(format!("Failed to create tray icon: {}", e)))?;
 
         // Build context menu.
         let menu = Menu::new();
@@ -86,9 +85,7 @@ impl TrayService {
             .with_icon(icon)
             .with_menu(Box::new(menu))
             .build()
-            .map_err(|e| {
-                EngramError::Config(format!("Failed to create tray icon: {}", e))
-            })?;
+            .map_err(|e| EngramError::Config(format!("Failed to create tray icon: {}", e)))?;
 
         tracing::info!("System tray icon created");
 
@@ -118,24 +115,21 @@ impl TrayService {
         use tray_icon::Icon;
 
         let (r, g, b) = match state {
-            TrayState::Idle => (128, 128, 128),       // Grey
-            TrayState::Listening => (70, 130, 230),    // Blue
-            TrayState::Processing => (80, 200, 120),   // Green
-            TrayState::Error => (230, 160, 50),        // Orange
+            TrayState::Idle => (128, 128, 128),      // Grey
+            TrayState::Listening => (70, 130, 230),  // Blue
+            TrayState::Processing => (80, 200, 120), // Green
+            TrayState::Error => (230, 160, 50),      // Orange
         };
 
         let icon_data = create_icon_rgba(r, g, b, 255);
-        let icon = Icon::from_rgba(icon_data, 16, 16).map_err(|e| {
-            EngramError::Config(format!("Failed to create icon: {}", e))
-        })?;
+        let icon = Icon::from_rgba(icon_data, 16, 16)
+            .map_err(|e| EngramError::Config(format!("Failed to create icon: {}", e)))?;
 
         if let Some(ref tray) = self._tray {
-            tray.set_icon(Some(icon)).map_err(|e| {
-                EngramError::Config(format!("Failed to set tray icon: {}", e))
-            })?;
-            tray.set_tooltip(Some(format!("Engram - {}", state))).map_err(|e| {
-                EngramError::Config(format!("Failed to set tooltip: {}", e))
-            })?;
+            tray.set_icon(Some(icon))
+                .map_err(|e| EngramError::Config(format!("Failed to set tray icon: {}", e)))?;
+            tray.set_tooltip(Some(format!("Engram - {}", state)))
+                .map_err(|e| EngramError::Config(format!("Failed to set tooltip: {}", e)))?;
         }
 
         self.state = state;

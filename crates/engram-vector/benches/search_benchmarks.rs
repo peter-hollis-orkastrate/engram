@@ -93,7 +93,11 @@ fn build_populated_index(count: usize) -> (VectorIndex, MockEmbedding) {
             .expect("insert failed");
     }
 
-    assert_eq!(index.len(), count, "Index should contain all inserted chunks");
+    assert_eq!(
+        index.len(),
+        count,
+        "Index should contain all inserted chunks"
+    );
     (index, embedder)
 }
 
@@ -170,11 +174,7 @@ fn bench_hybrid_search(c: &mut Criterion) {
                 ..Default::default()
             };
             let results = rt
-                .block_on(engine.hybrid_search(
-                    "deployment pipeline monitoring",
-                    filters,
-                    10,
-                ))
+                .block_on(engine.hybrid_search("deployment pipeline monitoring", filters, 10))
                 .expect("hybrid search failed");
             results
         });
@@ -219,7 +219,10 @@ fn bench_latency_assertions(c: &mut Criterion) {
     group.bench_function("semantic_p95_check", |b| {
         b.iter(|| {
             let start = std::time::Instant::now();
-            let _hits = engine.index().search(&query_vec, 10).expect("search failed");
+            let _hits = engine
+                .index()
+                .search(&query_vec, 10)
+                .expect("search failed");
             let elapsed = start.elapsed();
             // We don't assert inside the hot loop (criterion handles timing),
             // but we verify the operation completes within a generous bound.
@@ -237,11 +240,7 @@ fn bench_latency_assertions(c: &mut Criterion) {
         b.iter(|| {
             let start = std::time::Instant::now();
             let _results = rt
-                .block_on(engine.hybrid_search(
-                    "software deployment",
-                    SearchFilters::default(),
-                    10,
-                ))
+                .block_on(engine.hybrid_search("software deployment", SearchFilters::default(), 10))
                 .expect("hybrid search failed");
             let elapsed = start.elapsed();
             assert!(
@@ -262,16 +261,15 @@ fn bench_latency_assertions(c: &mut Criterion) {
 
     for _ in 0..100 {
         let start = std::time::Instant::now();
-        let _hits = engine.index().search(&query_vec, 10).expect("search failed");
+        let _hits = engine
+            .index()
+            .search(&query_vec, 10)
+            .expect("search failed");
         semantic_times.push(start.elapsed());
 
         let start = std::time::Instant::now();
         let _results = rt
-            .block_on(engine.hybrid_search(
-                "software deployment",
-                SearchFilters::default(),
-                10,
-            ))
+            .block_on(engine.hybrid_search("software deployment", SearchFilters::default(), 10))
             .expect("hybrid search failed");
         hybrid_times.push(start.elapsed());
     }
@@ -282,12 +280,15 @@ fn bench_latency_assertions(c: &mut Criterion) {
     let semantic_p95 = semantic_times[94]; // 95th percentile (0-indexed)
     let hybrid_p95 = hybrid_times[94];
 
+    eprintln!("\n=== Latency Results ({} chunks) ===", count);
     eprintln!(
-        "\n=== Latency Results ({} chunks) ===",
-        count
+        "Semantic search p95: {:?} (target: {:?})",
+        semantic_p95, semantic_target
     );
-    eprintln!("Semantic search p95: {:?} (target: {:?})", semantic_p95, semantic_target);
-    eprintln!("Hybrid search p95:   {:?} (target: {:?})", hybrid_p95, hybrid_target);
+    eprintln!(
+        "Hybrid search p95:   {:?} (target: {:?})",
+        hybrid_p95, hybrid_target
+    );
 
     assert!(
         semantic_p95 < semantic_target,
@@ -305,8 +306,14 @@ fn bench_latency_assertions(c: &mut Criterion) {
         count
     );
 
-    eprintln!("NF-1: PASS (semantic p95 {:?} < {:?})", semantic_p95, semantic_target);
-    eprintln!("NF-2: PASS (hybrid p95 {:?} < {:?})", hybrid_p95, hybrid_target);
+    eprintln!(
+        "NF-1: PASS (semantic p95 {:?} < {:?})",
+        semantic_p95, semantic_target
+    );
+    eprintln!(
+        "NF-2: PASS (hybrid p95 {:?} < {:?})",
+        hybrid_p95, hybrid_target
+    );
 }
 
 criterion_group!(

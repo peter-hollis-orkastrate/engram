@@ -166,5 +166,9 @@ fn bench_pii_latency_assertion(c: &mut Criterion) {
     eprintln!("NF-3: PASS (phone PII p95 {:?} < {:?})", p95, target);
 }
 
-criterion_group!(benches, bench_pii_phone_detection, bench_pii_latency_assertion);
+criterion_group!(
+    benches,
+    bench_pii_phone_detection,
+    bench_pii_latency_assertion
+);
 criterion_main!(benches);

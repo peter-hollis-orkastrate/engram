@@ -9,9 +9,9 @@
 #[cfg(not(target_os = "windows"))]
 use tracing::warn;
 
+use std::sync::atomic::AtomicBool;
 #[cfg(target_os = "windows")]
 use std::sync::atomic::Ordering;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use engram_core::error::EngramError;

@@ -1081,6 +1081,7 @@ dependencies = [
  "chrono",
  "engram-core",
  "engram-dictation",
+ "engram-insight",
  "engram-storage",
  "engram-ui",
  "engram-vector",

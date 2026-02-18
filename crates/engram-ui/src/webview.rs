@@ -76,25 +76,12 @@ impl WebviewConfig {
     ///
     /// Returns `(x, y)` coordinates for the top-left corner of the panel
     /// so that it appears anchored to the tray icon.
-    pub fn panel_position(
-        &self,
-        tray_x: i32,
-        tray_y: i32,
-        edge: TaskbarEdge,
-    ) -> (i32, i32) {
+    pub fn panel_position(&self, tray_x: i32, tray_y: i32, edge: TaskbarEdge) -> (i32, i32) {
         match edge {
-            TaskbarEdge::Bottom => {
-                (tray_x - self.width as i32 / 2, tray_y - self.height as i32)
-            }
-            TaskbarEdge::Top => {
-                (tray_x - self.width as i32 / 2, tray_y + 32)
-            }
-            TaskbarEdge::Left => {
-                (tray_x + 32, tray_y - self.height as i32 / 2)
-            }
-            TaskbarEdge::Right => {
-                (tray_x - self.width as i32, tray_y - self.height as i32 / 2)
-            }
+            TaskbarEdge::Bottom => (tray_x - self.width as i32 / 2, tray_y - self.height as i32),
+            TaskbarEdge::Top => (tray_x - self.width as i32 / 2, tray_y + 32),
+            TaskbarEdge::Left => (tray_x + 32, tray_y - self.height as i32 / 2),
+            TaskbarEdge::Right => (tray_x - self.width as i32, tray_y - self.height as i32 / 2),
         }
     }
 }
@@ -136,11 +123,24 @@ impl PlaceholderWindowHandle {
         static REGISTER_CLASS: Once = Once::new();
         // Wide-encoded class name: "EngramWebviewHost\0"
         const CLASS_NAME: &[u16] = &[
-            b'E' as u16, b'n' as u16, b'g' as u16, b'r' as u16,
-            b'a' as u16, b'm' as u16, b'W' as u16, b'e' as u16,
-            b'b' as u16, b'v' as u16, b'i' as u16, b'e' as u16,
-            b'w' as u16, b'H' as u16, b'o' as u16, b's' as u16,
-            b't' as u16, 0,
+            b'E' as u16,
+            b'n' as u16,
+            b'g' as u16,
+            b'r' as u16,
+            b'a' as u16,
+            b'm' as u16,
+            b'W' as u16,
+            b'e' as u16,
+            b'b' as u16,
+            b'v' as u16,
+            b'i' as u16,
+            b'e' as u16,
+            b'w' as u16,
+            b'H' as u16,
+            b'o' as u16,
+            b's' as u16,
+            b't' as u16,
+            0,
         ];
 
         REGISTER_CLASS.call_once(|| {
@@ -171,18 +171,18 @@ impl PlaceholderWindowHandle {
         // frameless popup (WS_POPUP). Returns 0 on failure.
         let hwnd = unsafe {
             CreateWindowExW(
-                0,                          // dwExStyle
-                CLASS_NAME.as_ptr(),        // lpClassName
-                CLASS_NAME.as_ptr(),        // lpWindowName (reuse class name)
-                WS_POPUP,                   // dwStyle: frameless, not visible
-                0,                          // x
-                0,                          // y
-                width as i32,               // nWidth
-                height as i32,              // nHeight
-                0,                          // hWndParent
-                0,                          // hMenu
-                0 as HINSTANCE,             // hInstance
-                std::ptr::null(),           // lpParam
+                0,                   // dwExStyle
+                CLASS_NAME.as_ptr(), // lpClassName
+                CLASS_NAME.as_ptr(), // lpWindowName (reuse class name)
+                WS_POPUP,            // dwStyle: frameless, not visible
+                0,                   // x
+                0,                   // y
+                width as i32,        // nWidth
+                height as i32,       // nHeight
+                0,                   // hWndParent
+                0,                   // hMenu
+                0 as HINSTANCE,      // hInstance
+                std::ptr::null(),    // lpParam
             )
         };
 
@@ -192,7 +192,12 @@ impl PlaceholderWindowHandle {
             ));
         }
 
-        tracing::debug!(hwnd, width, height, "Created hidden Win32 window for webview");
+        tracing::debug!(
+            hwnd,
+            width,
+            height,
+            "Created hidden Win32 window for webview"
+        );
         Ok(Self { hwnd })
     }
 }
@@ -275,16 +280,12 @@ impl TrayPanelWebview {
         // event loop (winit, tao, or raw Win32 message pump) and use
         // a real parent HWND. This placeholder allows compilation and
         // testing of the webview pipeline without a live window.
-        let handle = PlaceholderWindowHandle::create_hidden_window(
-            self.config.width,
-            self.config.height,
-        )?;
+        let handle =
+            PlaceholderWindowHandle::create_hidden_window(self.config.width, self.config.height)?;
         let _webview = WebViewBuilder::new()
             .with_html(html)
             .build_as_child(&handle)
-            .map_err(|e| {
-                EngramError::Config(format!("Failed to create webview: {}", e))
-            })?;
+            .map_err(|e| EngramError::Config(format!("Failed to create webview: {}", e)))?;
 
         tracing::info!("Tray panel webview shown");
         Ok(())
@@ -352,10 +353,7 @@ mod tests {
         let panel = TrayPanelWebview::new(WebviewConfig::default());
         let result = panel.show();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("webview"));
+        assert!(result.unwrap_err().to_string().contains("webview"));
     }
 
     // -----------------------------------------------------------------------

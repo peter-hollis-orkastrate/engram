@@ -65,9 +65,7 @@ impl EngramConfig {
         if let Some(obj) = update.as_object() {
             for key in obj.keys() {
                 if SafetyConfig::is_protected_field(key) {
-                    return Err(EngramError::ProtectedField {
-                        field: key.clone(),
-                    });
+                    return Err(EngramError::ProtectedField { field: key.clone() });
                 }
             }
         }
@@ -1047,10 +1045,14 @@ cold_format = "binary"
     fn test_safety_fields_protected() {
         assert!(SafetyConfig::is_protected_field("safety"));
         assert!(SafetyConfig::is_protected_field("safety.pii_detection"));
-        assert!(SafetyConfig::is_protected_field("safety.credit_card_redaction"));
+        assert!(SafetyConfig::is_protected_field(
+            "safety.credit_card_redaction"
+        ));
         assert!(SafetyConfig::is_protected_field("safety.ssn_redaction"));
         assert!(SafetyConfig::is_protected_field("safety.phone_redaction"));
-        assert!(SafetyConfig::is_protected_field("safety.custom_deny_patterns"));
+        assert!(SafetyConfig::is_protected_field(
+            "safety.custom_deny_patterns"
+        ));
     }
 
     #[test]

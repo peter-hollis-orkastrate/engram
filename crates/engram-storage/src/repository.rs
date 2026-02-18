@@ -339,7 +339,11 @@ impl DictationRepository {
     }
 
     /// Find dictation entries by application.
-    pub fn find_by_app(&self, app_name: &str, limit: u64) -> Result<Vec<DictationEntry>, EngramError> {
+    pub fn find_by_app(
+        &self,
+        app_name: &str,
+        limit: u64,
+    ) -> Result<Vec<DictationEntry>, EngramError> {
         self.db.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
@@ -491,9 +495,7 @@ impl VectorMetadataRepository {
 // Helper functions for row-to-entity conversion.
 // ============================================================================
 
-fn row_to_screen_frame(
-    row: &rusqlite::Row<'_>,
-) -> Result<ScreenFrame, EngramError> {
+fn row_to_screen_frame(row: &rusqlite::Row<'_>) -> Result<ScreenFrame, EngramError> {
     let id_str: String = row
         .get(0)
         .map_err(|e| EngramError::Storage(e.to_string()))?;
@@ -533,9 +535,7 @@ fn row_to_screen_frame(
     })
 }
 
-fn row_to_audio_chunk(
-    row: &rusqlite::Row<'_>,
-) -> Result<AudioChunk, EngramError> {
+fn row_to_audio_chunk(row: &rusqlite::Row<'_>) -> Result<AudioChunk, EngramError> {
     let id_str: String = row
         .get(0)
         .map_err(|e| EngramError::Storage(e.to_string()))?;
@@ -575,9 +575,7 @@ fn row_to_audio_chunk(
     })
 }
 
-fn row_to_dictation_entry(
-    row: &rusqlite::Row<'_>,
-) -> Result<DictationEntry, EngramError> {
+fn row_to_dictation_entry(row: &rusqlite::Row<'_>) -> Result<DictationEntry, EngramError> {
     let id_str: String = row
         .get(0)
         .map_err(|e| EngramError::Storage(e.to_string()))?;
@@ -624,9 +622,7 @@ fn row_to_dictation_entry(
     })
 }
 
-fn row_to_vector_metadata(
-    row: &rusqlite::Row<'_>,
-) -> Result<VectorMetadata, EngramError> {
+fn row_to_vector_metadata(row: &rusqlite::Row<'_>) -> Result<VectorMetadata, EngramError> {
     let id_str: String = row
         .get(0)
         .map_err(|e| EngramError::Storage(e.to_string()))?;

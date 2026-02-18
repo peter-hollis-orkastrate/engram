@@ -192,7 +192,10 @@ mod tests {
     fn test_classify_future_timestamp() {
         let config = default_config();
         let future = Utc::now() + chrono::Duration::days(5);
-        assert_eq!(TierManager::classify_tier(future, &config), StorageTier::Hot);
+        assert_eq!(
+            TierManager::classify_tier(future, &config),
+            StorageTier::Hot
+        );
     }
 
     #[test]
@@ -228,11 +231,9 @@ mod tests {
         // Verify the entry was moved to warm.
         db.with_conn(|conn| {
             let tier: String = conn
-                .query_row(
-                    "SELECT tier FROM captures WHERE id = 'old-1'",
-                    [],
-                    |row| row.get(0),
-                )
+                .query_row("SELECT tier FROM captures WHERE id = 'old-1'", [], |row| {
+                    row.get(0)
+                })
                 .map_err(|e| EngramError::Storage(e.to_string()))?;
             assert_eq!(tier, "warm");
             Ok(())

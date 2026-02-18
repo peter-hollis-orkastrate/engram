@@ -23,9 +23,7 @@ impl VaultExporter {
         let path = PathBuf::from(shellexpand_tilde(vault_path));
         // Security: validate path
         if vault_path.contains("..") {
-            return Err(InsightError::Export(
-                "Path traversal detected".to_string(),
-            ));
+            return Err(InsightError::Export("Path traversal detected".to_string()));
         }
         if !path.is_absolute() && !vault_path.starts_with('~') {
             return Err(InsightError::Export(

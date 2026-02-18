@@ -53,9 +53,11 @@ impl IntoResponse for ApiError {
             ApiError::PayloadTooLarge(msg) => {
                 (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", msg)
             }
-            ApiError::UnprocessableEntity(msg) => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "unprocessable_entity", msg)
-            }
+            ApiError::UnprocessableEntity(msg) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unprocessable_entity",
+                msg,
+            ),
             ApiError::TooManyRequests(msg) => {
                 (StatusCode::TOO_MANY_REQUESTS, "too_many_requests", msg)
             }
@@ -91,9 +93,7 @@ impl IntoResponse for ApiError {
 impl From<engram_core::error::EngramError> for ApiError {
     fn from(err: engram_core::error::EngramError) -> Self {
         match &err {
-            engram_core::error::EngramError::Config(msg) => {
-                ApiError::BadRequest(msg.clone())
-            }
+            engram_core::error::EngramError::Config(msg) => ApiError::BadRequest(msg.clone()),
             engram_core::error::EngramError::ProtectedField { field } => {
                 ApiError::Forbidden(format!("Cannot modify protected field: {}", field))
             }

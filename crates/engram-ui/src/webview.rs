@@ -109,6 +109,30 @@ impl Default for WebviewConfig {
     }
 }
 
+/// Placeholder window handle that implements `HasWindowHandle`.
+///
+/// Required by wry 0.48+ which uses raw-window-handle 0.6 traits.
+/// In production, this should be replaced with a real Win32 HWND
+/// obtained from `CreateWindowExW` or a windowing library.
+#[cfg(feature = "webview")]
+struct PlaceholderWindowHandle;
+
+#[cfg(feature = "webview")]
+impl wry::raw_window_handle::HasWindowHandle for PlaceholderWindowHandle {
+    fn window_handle(
+        &self,
+    ) -> Result<wry::raw_window_handle::WindowHandle<'_>, wry::raw_window_handle::HandleError> {
+        let raw = wry::raw_window_handle::RawWindowHandle::Win32(
+            wry::raw_window_handle::Win32WindowHandle::new(
+                std::num::NonZeroIsize::new(1).unwrap(), // Placeholder HWND
+            ),
+        );
+        // SAFETY: The handle is valid for the lifetime of this struct.
+        // In production, this must be a real HWND from CreateWindowExW.
+        Ok(unsafe { wry::raw_window_handle::WindowHandle::borrow_raw(raw) })
+    }
+}
+
 /// The tray panel webview window.
 ///
 /// Creates a frameless webview popup containing the tray panel HTML.
@@ -147,12 +171,13 @@ impl TrayPanelWebview {
 
         // Build a webview with the tray panel HTML.
         // In a real app, this would be integrated with the platform's
-        // event loop (winit, tao, or raw Win32 message pump).
+        // event loop (winit, tao, or raw Win32 message pump) and use
+        // a real parent HWND. This placeholder allows compilation and
+        // testing of the webview pipeline without a live window.
+        let handle = PlaceholderWindowHandle;
         let _webview = WebViewBuilder::new()
             .with_html(html)
-            .build_as_child(&wry::raw_window_handle::RawWindowHandle::Win32(
-                wry::raw_window_handle::Win32WindowHandle::new(std::num::NonZeroIsize::new(0).unwrap()),
-            ))
+            .build_as_child(&handle)
             .map_err(|e| {
                 EngramError::Config(format!("Failed to create webview: {}", e))
             })?;

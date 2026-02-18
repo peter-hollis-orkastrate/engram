@@ -664,6 +664,397 @@ impl QueryService {
     }
 }
 
+// =============================================================================
+// Action Engine Row Types
+// =============================================================================
+
+/// A row from the intents table.
+#[derive(Debug, Clone)]
+pub struct IntentRow {
+    pub id: String,
+    pub intent_type: String,
+    pub raw_text: String,
+    pub extracted_action: String,
+    pub extracted_time: Option<String>,
+    pub confidence: f64,
+    pub source_chunk_id: String,
+    pub detected_at: String,
+    pub acted_on: bool,
+}
+
+/// Filters for querying intents.
+#[derive(Debug, Clone, Default)]
+pub struct IntentFilters {
+    pub intent_type: Option<String>,
+    pub min_confidence: Option<f64>,
+    pub acted_on: Option<bool>,
+    pub limit: Option<u32>,
+}
+
+/// A row from the tasks table.
+#[derive(Debug, Clone)]
+pub struct TaskRow {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub intent_id: Option<String>,
+    pub action_type: String,
+    pub action_payload: String,
+    pub scheduled_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub created_at: String,
+    pub source_chunk_id: Option<String>,
+}
+
+/// Filters for querying tasks.
+#[derive(Debug, Clone, Default)]
+pub struct TaskFilters {
+    pub status: Option<String>,
+    pub action_type: Option<String>,
+    pub limit: Option<u32>,
+}
+
+/// A row from the action_history table.
+#[derive(Debug, Clone)]
+pub struct ActionHistoryRow {
+    pub id: String,
+    pub task_id: String,
+    pub action_type: String,
+    pub result: String,
+    pub error_message: Option<String>,
+    pub executed_at: String,
+}
+
+/// Filters for querying action history.
+#[derive(Debug, Clone, Default)]
+pub struct HistoryFilters {
+    pub task_id: Option<String>,
+    pub action_type: Option<String>,
+    pub limit: Option<u32>,
+}
+
+// =============================================================================
+// Action Engine Query Methods
+// =============================================================================
+
+/// Store an intent row.
+pub fn store_intent(
+    conn: &rusqlite::Connection,
+    intent: &IntentRow,
+) -> Result<(), EngramError> {
+    conn.execute(
+        "INSERT INTO intents (id, intent_type, raw_text, extracted_action, extracted_time, confidence, source_chunk_id, detected_at, acted_on)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            intent.id,
+            intent.intent_type,
+            intent.raw_text,
+            intent.extracted_action,
+            intent.extracted_time,
+            intent.confidence,
+            intent.source_chunk_id,
+            intent.detected_at,
+            intent.acted_on as i32,
+        ],
+    )
+    .map_err(|e| EngramError::Storage(format!("Store intent: {}", e)))?;
+    Ok(())
+}
+
+/// Get intents with optional filters.
+pub fn get_intents(
+    conn: &rusqlite::Connection,
+    filters: &IntentFilters,
+) -> Result<Vec<IntentRow>, EngramError> {
+    let limit_val = filters.limit.unwrap_or(100) as i64;
+    let mut conditions = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut idx = 1;
+
+    if let Some(ref it) = filters.intent_type {
+        conditions.push(format!("intent_type = ?{}", idx));
+        params.push(Box::new(it.clone()));
+        idx += 1;
+    }
+    if let Some(mc) = filters.min_confidence {
+        conditions.push(format!("confidence >= ?{}", idx));
+        params.push(Box::new(mc));
+        idx += 1;
+    }
+    if let Some(ao) = filters.acted_on {
+        conditions.push(format!("acted_on = ?{}", idx));
+        params.push(Box::new(ao as i32));
+        idx += 1;
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    let sql = format!(
+        "SELECT id, intent_type, raw_text, extracted_action, extracted_time, confidence, source_chunk_id, detected_at, acted_on
+         FROM intents {} ORDER BY detected_at DESC LIMIT ?{}",
+        where_clause, idx
+    );
+    params.push(Box::new(limit_val));
+
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(|p| p.as_ref()).collect();
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| EngramError::Storage(format!("Get intents prepare: {}", e)))?;
+
+    let rows = stmt
+        .query_map(params_refs.as_slice(), |row| {
+            let acted_on_i: i32 = row.get(8)?;
+            Ok(IntentRow {
+                id: row.get(0)?,
+                intent_type: row.get(1)?,
+                raw_text: row.get(2)?,
+                extracted_action: row.get(3)?,
+                extracted_time: row.get(4)?,
+                confidence: row.get(5)?,
+                source_chunk_id: row.get(6)?,
+                detected_at: row.get(7)?,
+                acted_on: acted_on_i != 0,
+            })
+        })
+        .map_err(|e| EngramError::Storage(format!("Get intents: {}", e)))?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row.map_err(|e| EngramError::Storage(e.to_string()))?);
+    }
+    Ok(results)
+}
+
+/// Store a task row.
+pub fn store_task(
+    conn: &rusqlite::Connection,
+    task: &TaskRow,
+) -> Result<(), EngramError> {
+    conn.execute(
+        "INSERT INTO tasks (id, title, status, intent_id, action_type, action_payload, scheduled_at, completed_at, created_at, source_chunk_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        rusqlite::params![
+            task.id,
+            task.title,
+            task.status,
+            task.intent_id,
+            task.action_type,
+            task.action_payload,
+            task.scheduled_at,
+            task.completed_at,
+            task.created_at,
+            task.source_chunk_id,
+        ],
+    )
+    .map_err(|e| EngramError::Storage(format!("Store task: {}", e)))?;
+    Ok(())
+}
+
+/// Get a single task by ID.
+pub fn get_task(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Result<Option<TaskRow>, EngramError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, title, status, intent_id, action_type, action_payload, scheduled_at, completed_at, created_at, source_chunk_id
+             FROM tasks WHERE id = ?1",
+        )
+        .map_err(|e| EngramError::Storage(format!("Get task prepare: {}", e)))?;
+
+    let mut rows = stmt
+        .query_map(rusqlite::params![id], |row| {
+            Ok(TaskRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                status: row.get(2)?,
+                intent_id: row.get(3)?,
+                action_type: row.get(4)?,
+                action_payload: row.get(5)?,
+                scheduled_at: row.get(6)?,
+                completed_at: row.get(7)?,
+                created_at: row.get(8)?,
+                source_chunk_id: row.get(9)?,
+            })
+        })
+        .map_err(|e| EngramError::Storage(format!("Get task: {}", e)))?;
+
+    if let Some(row) = rows.next() {
+        Ok(Some(row.map_err(|e| EngramError::Storage(e.to_string()))?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Update a task's status and optionally set completed_at.
+pub fn update_task_status(
+    conn: &rusqlite::Connection,
+    id: &str,
+    status: &str,
+    completed_at: Option<&str>,
+) -> Result<bool, EngramError> {
+    let rows_affected = conn
+        .execute(
+            "UPDATE tasks SET status = ?1, completed_at = ?2 WHERE id = ?3",
+            rusqlite::params![status, completed_at, id],
+        )
+        .map_err(|e| EngramError::Storage(format!("Update task status: {}", e)))?;
+    Ok(rows_affected > 0)
+}
+
+/// List tasks with optional filters.
+pub fn list_tasks(
+    conn: &rusqlite::Connection,
+    filters: &TaskFilters,
+) -> Result<Vec<TaskRow>, EngramError> {
+    let limit_val = filters.limit.unwrap_or(100) as i64;
+    let mut conditions = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut idx = 1;
+
+    if let Some(ref s) = filters.status {
+        conditions.push(format!("status = ?{}", idx));
+        params.push(Box::new(s.clone()));
+        idx += 1;
+    }
+    if let Some(ref at) = filters.action_type {
+        conditions.push(format!("action_type = ?{}", idx));
+        params.push(Box::new(at.clone()));
+        idx += 1;
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    let sql = format!(
+        "SELECT id, title, status, intent_id, action_type, action_payload, scheduled_at, completed_at, created_at, source_chunk_id
+         FROM tasks {} ORDER BY created_at DESC LIMIT ?{}",
+        where_clause, idx
+    );
+    params.push(Box::new(limit_val));
+
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(|p| p.as_ref()).collect();
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| EngramError::Storage(format!("List tasks prepare: {}", e)))?;
+
+    let rows = stmt
+        .query_map(params_refs.as_slice(), |row| {
+            Ok(TaskRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                status: row.get(2)?,
+                intent_id: row.get(3)?,
+                action_type: row.get(4)?,
+                action_payload: row.get(5)?,
+                scheduled_at: row.get(6)?,
+                completed_at: row.get(7)?,
+                created_at: row.get(8)?,
+                source_chunk_id: row.get(9)?,
+            })
+        })
+        .map_err(|e| EngramError::Storage(format!("List tasks: {}", e)))?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row.map_err(|e| EngramError::Storage(e.to_string()))?);
+    }
+    Ok(results)
+}
+
+/// Store an action history row.
+pub fn store_action_history(
+    conn: &rusqlite::Connection,
+    record: &ActionHistoryRow,
+) -> Result<(), EngramError> {
+    conn.execute(
+        "INSERT INTO action_history (id, task_id, action_type, result, error_message, executed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            record.id,
+            record.task_id,
+            record.action_type,
+            record.result,
+            record.error_message,
+            record.executed_at,
+        ],
+    )
+    .map_err(|e| EngramError::Storage(format!("Store action history: {}", e)))?;
+    Ok(())
+}
+
+/// Get action history with optional filters.
+pub fn get_action_history(
+    conn: &rusqlite::Connection,
+    filters: &HistoryFilters,
+) -> Result<Vec<ActionHistoryRow>, EngramError> {
+    let limit_val = filters.limit.unwrap_or(100) as i64;
+    let mut conditions = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut idx = 1;
+
+    if let Some(ref tid) = filters.task_id {
+        conditions.push(format!("task_id = ?{}", idx));
+        params.push(Box::new(tid.clone()));
+        idx += 1;
+    }
+    if let Some(ref at) = filters.action_type {
+        conditions.push(format!("action_type = ?{}", idx));
+        params.push(Box::new(at.clone()));
+        idx += 1;
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    let sql = format!(
+        "SELECT id, task_id, action_type, result, error_message, executed_at
+         FROM action_history {} ORDER BY executed_at DESC LIMIT ?{}",
+        where_clause, idx
+    );
+    params.push(Box::new(limit_val));
+
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(|p| p.as_ref()).collect();
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| EngramError::Storage(format!("Get action history prepare: {}", e)))?;
+
+    let rows = stmt
+        .query_map(params_refs.as_slice(), |row| {
+            Ok(ActionHistoryRow {
+                id: row.get(0)?,
+                task_id: row.get(1)?,
+                action_type: row.get(2)?,
+                result: row.get(3)?,
+                error_message: row.get(4)?,
+                executed_at: row.get(5)?,
+            })
+        })
+        .map_err(|e| EngramError::Storage(format!("Get action history: {}", e)))?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row.map_err(|e| EngramError::Storage(e.to_string()))?);
+    }
+    Ok(results)
+}
+
 fn map_capture_row(row: &rusqlite::Row<'_>) -> Result<CaptureRow, EngramError> {
     let id_str: String = row
         .get(0)
@@ -1069,5 +1460,381 @@ mod tests {
         let qs = QueryService::new(db);
         let chunks = qs.get_chunks_since(0).unwrap();
         assert!(chunks.is_empty());
+    }
+
+    // =========================================================================
+    // Action Engine Query Tests
+    // =========================================================================
+
+    fn make_conn() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        crate::migrations::run_migrations(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_store_and_get_intent() {
+        let conn = make_conn();
+        let intent = IntentRow {
+            id: "int-100".to_string(),
+            intent_type: "reminder".to_string(),
+            raw_text: "remind me to call Bob".to_string(),
+            extracted_action: "call Bob".to_string(),
+            extracted_time: Some("2026-02-18T15:00:00".to_string()),
+            confidence: 0.92,
+            source_chunk_id: "chunk-1".to_string(),
+            detected_at: "2026-02-18T10:00:00".to_string(),
+            acted_on: false,
+        };
+
+        store_intent(&conn, &intent).unwrap();
+        let results = get_intents(&conn, &IntentFilters::default()).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "int-100");
+        assert_eq!(results[0].intent_type, "reminder");
+        assert!((results[0].confidence - 0.92).abs() < f64::EPSILON);
+        assert!(!results[0].acted_on);
+    }
+
+    #[test]
+    fn test_get_intents_filtered_by_type() {
+        let conn = make_conn();
+        store_intent(&conn, &IntentRow {
+            id: "int-a".to_string(),
+            intent_type: "reminder".to_string(),
+            raw_text: "remind".to_string(),
+            extracted_action: "call".to_string(),
+            extracted_time: None,
+            confidence: 0.9,
+            source_chunk_id: "c1".to_string(),
+            detected_at: "2026-02-18T10:00:00".to_string(),
+            acted_on: false,
+        }).unwrap();
+
+        store_intent(&conn, &IntentRow {
+            id: "int-b".to_string(),
+            intent_type: "task".to_string(),
+            raw_text: "TODO: fix".to_string(),
+            extracted_action: "fix".to_string(),
+            extracted_time: None,
+            confidence: 0.95,
+            source_chunk_id: "c2".to_string(),
+            detected_at: "2026-02-18T11:00:00".to_string(),
+            acted_on: false,
+        }).unwrap();
+
+        let reminders = get_intents(&conn, &IntentFilters {
+            intent_type: Some("reminder".to_string()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(reminders.len(), 1);
+        assert_eq!(reminders[0].id, "int-a");
+    }
+
+    #[test]
+    fn test_get_intents_filtered_by_confidence() {
+        let conn = make_conn();
+        store_intent(&conn, &IntentRow {
+            id: "int-lo".to_string(),
+            intent_type: "task".to_string(),
+            raw_text: "need to".to_string(),
+            extracted_action: "do".to_string(),
+            extracted_time: None,
+            confidence: 0.5,
+            source_chunk_id: "c1".to_string(),
+            detected_at: "2026-02-18T10:00:00".to_string(),
+            acted_on: false,
+        }).unwrap();
+
+        store_intent(&conn, &IntentRow {
+            id: "int-hi".to_string(),
+            intent_type: "task".to_string(),
+            raw_text: "TODO:".to_string(),
+            extracted_action: "fix".to_string(),
+            extracted_time: None,
+            confidence: 0.95,
+            source_chunk_id: "c2".to_string(),
+            detected_at: "2026-02-18T11:00:00".to_string(),
+            acted_on: false,
+        }).unwrap();
+
+        let high = get_intents(&conn, &IntentFilters {
+            min_confidence: Some(0.8),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(high.len(), 1);
+        assert_eq!(high[0].id, "int-hi");
+    }
+
+    #[test]
+    fn test_store_and_get_task() {
+        let conn = make_conn();
+        let task = TaskRow {
+            id: "task-100".to_string(),
+            title: "Call Bob".to_string(),
+            status: "pending".to_string(),
+            intent_id: None,
+            action_type: "reminder".to_string(),
+            action_payload: r#"{"msg":"call"}"#.to_string(),
+            scheduled_at: Some("2026-02-18T15:00:00".to_string()),
+            completed_at: None,
+            created_at: "2026-02-18T10:00:00".to_string(),
+            source_chunk_id: None,
+        };
+
+        store_task(&conn, &task).unwrap();
+
+        let found = get_task(&conn, "task-100").unwrap();
+        assert!(found.is_some());
+        let t = found.unwrap();
+        assert_eq!(t.title, "Call Bob");
+        assert_eq!(t.status, "pending");
+    }
+
+    #[test]
+    fn test_get_task_not_found() {
+        let conn = make_conn();
+        let found = get_task(&conn, "nonexistent").unwrap();
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_update_task_status_fn() {
+        let conn = make_conn();
+        store_task(&conn, &TaskRow {
+            id: "task-upd".to_string(),
+            title: "Test".to_string(),
+            status: "pending".to_string(),
+            intent_id: None,
+            action_type: "reminder".to_string(),
+            action_payload: "{}".to_string(),
+            scheduled_at: None,
+            completed_at: None,
+            created_at: "2026-02-18T10:00:00".to_string(),
+            source_chunk_id: None,
+        }).unwrap();
+
+        let updated = update_task_status(&conn, "task-upd", "active", None).unwrap();
+        assert!(updated);
+
+        let t = get_task(&conn, "task-upd").unwrap().unwrap();
+        assert_eq!(t.status, "active");
+    }
+
+    #[test]
+    fn test_update_task_status_with_completed_at() {
+        let conn = make_conn();
+        store_task(&conn, &TaskRow {
+            id: "task-done".to_string(),
+            title: "Done".to_string(),
+            status: "active".to_string(),
+            intent_id: None,
+            action_type: "reminder".to_string(),
+            action_payload: "{}".to_string(),
+            scheduled_at: None,
+            completed_at: None,
+            created_at: "2026-02-18T10:00:00".to_string(),
+            source_chunk_id: None,
+        }).unwrap();
+
+        update_task_status(&conn, "task-done", "done", Some("2026-02-18T17:00:00")).unwrap();
+
+        let t = get_task(&conn, "task-done").unwrap().unwrap();
+        assert_eq!(t.status, "done");
+        assert_eq!(t.completed_at, Some("2026-02-18T17:00:00".to_string()));
+    }
+
+    #[test]
+    fn test_update_task_status_not_found() {
+        let conn = make_conn();
+        let updated = update_task_status(&conn, "nonexistent", "done", None).unwrap();
+        assert!(!updated);
+    }
+
+    #[test]
+    fn test_list_tasks_all() {
+        let conn = make_conn();
+        store_task(&conn, &TaskRow {
+            id: "t1".to_string(),
+            title: "T1".to_string(),
+            status: "pending".to_string(),
+            intent_id: None,
+            action_type: "reminder".to_string(),
+            action_payload: "{}".to_string(),
+            scheduled_at: None,
+            completed_at: None,
+            created_at: "2026-02-18T10:00:00".to_string(),
+            source_chunk_id: None,
+        }).unwrap();
+        store_task(&conn, &TaskRow {
+            id: "t2".to_string(),
+            title: "T2".to_string(),
+            status: "active".to_string(),
+            intent_id: None,
+            action_type: "clipboard".to_string(),
+            action_payload: "{}".to_string(),
+            scheduled_at: None,
+            completed_at: None,
+            created_at: "2026-02-18T11:00:00".to_string(),
+            source_chunk_id: None,
+        }).unwrap();
+
+        let all = list_tasks(&conn, &TaskFilters::default()).unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_list_tasks_filtered() {
+        let conn = make_conn();
+        store_task(&conn, &TaskRow {
+            id: "tf1".to_string(),
+            title: "F1".to_string(),
+            status: "pending".to_string(),
+            intent_id: None,
+            action_type: "reminder".to_string(),
+            action_payload: "{}".to_string(),
+            scheduled_at: None,
+            completed_at: None,
+            created_at: "2026-02-18T10:00:00".to_string(),
+            source_chunk_id: None,
+        }).unwrap();
+        store_task(&conn, &TaskRow {
+            id: "tf2".to_string(),
+            title: "F2".to_string(),
+            status: "active".to_string(),
+            intent_id: None,
+            action_type: "reminder".to_string(),
+            action_payload: "{}".to_string(),
+            scheduled_at: None,
+            completed_at: None,
+            created_at: "2026-02-18T11:00:00".to_string(),
+            source_chunk_id: None,
+        }).unwrap();
+
+        let pending = list_tasks(&conn, &TaskFilters {
+            status: Some("pending".to_string()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, "tf1");
+    }
+
+    #[test]
+    fn test_store_and_get_action_history() {
+        let conn = make_conn();
+
+        // Create task first for FK
+        store_task(&conn, &TaskRow {
+            id: "task-hist".to_string(),
+            title: "History".to_string(),
+            status: "active".to_string(),
+            intent_id: None,
+            action_type: "notification".to_string(),
+            action_payload: "{}".to_string(),
+            scheduled_at: None,
+            completed_at: None,
+            created_at: "2026-02-18T10:00:00".to_string(),
+            source_chunk_id: None,
+        }).unwrap();
+
+        store_action_history(&conn, &ActionHistoryRow {
+            id: "ah-100".to_string(),
+            task_id: "task-hist".to_string(),
+            action_type: "notification".to_string(),
+            result: "success".to_string(),
+            error_message: None,
+            executed_at: "2026-02-18T10:05:00".to_string(),
+        }).unwrap();
+
+        let history = get_action_history(&conn, &HistoryFilters::default()).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, "ah-100");
+        assert_eq!(history[0].result, "success");
+        assert!(history[0].error_message.is_none());
+    }
+
+    #[test]
+    fn test_get_action_history_filtered_by_task() {
+        let conn = make_conn();
+
+        store_task(&conn, &TaskRow {
+            id: "t-a".to_string(),
+            title: "A".to_string(),
+            status: "active".to_string(),
+            intent_id: None,
+            action_type: "reminder".to_string(),
+            action_payload: "{}".to_string(),
+            scheduled_at: None,
+            completed_at: None,
+            created_at: "2026-02-18T10:00:00".to_string(),
+            source_chunk_id: None,
+        }).unwrap();
+        store_task(&conn, &TaskRow {
+            id: "t-b".to_string(),
+            title: "B".to_string(),
+            status: "active".to_string(),
+            intent_id: None,
+            action_type: "reminder".to_string(),
+            action_payload: "{}".to_string(),
+            scheduled_at: None,
+            completed_at: None,
+            created_at: "2026-02-18T11:00:00".to_string(),
+            source_chunk_id: None,
+        }).unwrap();
+
+        store_action_history(&conn, &ActionHistoryRow {
+            id: "ah-a".to_string(),
+            task_id: "t-a".to_string(),
+            action_type: "reminder".to_string(),
+            result: "ok".to_string(),
+            error_message: None,
+            executed_at: "2026-02-18T10:05:00".to_string(),
+        }).unwrap();
+        store_action_history(&conn, &ActionHistoryRow {
+            id: "ah-b".to_string(),
+            task_id: "t-b".to_string(),
+            action_type: "reminder".to_string(),
+            result: "ok".to_string(),
+            error_message: None,
+            executed_at: "2026-02-18T11:05:00".to_string(),
+        }).unwrap();
+
+        let for_a = get_action_history(&conn, &HistoryFilters {
+            task_id: Some("t-a".to_string()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(for_a.len(), 1);
+        assert_eq!(for_a[0].task_id, "t-a");
+    }
+
+    #[test]
+    fn test_action_history_with_error() {
+        let conn = make_conn();
+
+        store_task(&conn, &TaskRow {
+            id: "task-err2".to_string(),
+            title: "Err".to_string(),
+            status: "active".to_string(),
+            intent_id: None,
+            action_type: "shell_command".to_string(),
+            action_payload: "{}".to_string(),
+            scheduled_at: None,
+            completed_at: None,
+            created_at: "2026-02-18T10:00:00".to_string(),
+            source_chunk_id: None,
+        }).unwrap();
+
+        store_action_history(&conn, &ActionHistoryRow {
+            id: "ah-err2".to_string(),
+            task_id: "task-err2".to_string(),
+            action_type: "shell_command".to_string(),
+            result: "failed".to_string(),
+            error_message: Some("permission denied".to_string()),
+            executed_at: "2026-02-18T10:05:00".to_string(),
+        }).unwrap();
+
+        let history = get_action_history(&conn, &HistoryFilters::default()).unwrap();
+        assert_eq!(history[0].error_message, Some("permission denied".to_string()));
     }
 }

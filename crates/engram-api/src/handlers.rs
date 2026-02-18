@@ -1347,7 +1347,27 @@ pub async fn get_daily_digest_by_date(
     State(state): State<AppState>,
     Path(date): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Validate YYYY-MM-DD format.
+    if !is_valid_date_format(&date) {
+        return Err(ApiError::BadRequest(format!(
+            "Invalid date format '{}': expected YYYY-MM-DD",
+            date
+        )));
+    }
     get_daily_digest_by_date_inner(&state, &date).await
+}
+
+/// Check that a string matches the `YYYY-MM-DD` date format.
+fn is_valid_date_format(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() != 10 {
+        return false;
+    }
+    bytes[0..4].iter().all(|b| b.is_ascii_digit())
+        && bytes[4] == b'-'
+        && bytes[5..7].iter().all(|b| b.is_ascii_digit())
+        && bytes[7] == b'-'
+        && bytes[8..10].iter().all(|b| b.is_ascii_digit())
 }
 
 async fn get_daily_digest_by_date_inner(
@@ -1464,13 +1484,132 @@ pub async fn get_summaries(
 
 /// POST /insights/export - trigger vault export.
 pub async fn trigger_export(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // For now, return a success response indicating export was triggered.
-    // Full implementation would invoke VaultExporter.
-    Ok(Json(
-        serde_json::json!({"status": "export_triggered", "message": "Export scheduled"}),
-    ))
+    let config = state.config.lock().unwrap().clone();
+    let export_cfg = &config.insight.export;
+
+    // If export is not enabled or vault_path is empty, return early.
+    if !export_cfg.enabled || export_cfg.vault_path.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "status": "export_triggered",
+            "message": "Export not enabled or vault_path not configured",
+            "files_exported": 0
+        })));
+    }
+
+    let exporter = engram_insight::VaultExporter::new(&export_cfg.vault_path)
+        .map_err(|e| ApiError::Internal(format!("Failed to create exporter: {}", e)))?;
+
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let mut file_count: u32 = 0;
+
+    // Export summaries if configured.
+    if export_cfg.export_summaries {
+        let summary_rows = state
+            .query_service
+            .get_summaries(Some(&today), None, None)
+            .map_err(ApiError::from)?;
+
+        for row in &summary_rows {
+            let summary = engram_insight::Summary {
+                id: row.id,
+                title: row.title.clone(),
+                bullet_points: serde_json::from_str(&row.bullet_points).unwrap_or_default(),
+                source_chunk_ids: serde_json::from_str(&row.source_chunk_ids).unwrap_or_default(),
+                source_app: row.source_app.clone(),
+                time_range_start: row
+                    .time_range_start
+                    .as_deref()
+                    .and_then(|t| t.parse().ok())
+                    .unwrap_or(0),
+                time_range_end: row
+                    .time_range_end
+                    .as_deref()
+                    .and_then(|t| t.parse().ok())
+                    .unwrap_or(0),
+                created_at: 0,
+            };
+            if let Err(e) = exporter.export_summary(&summary) {
+                tracing::warn!(error = %e, "Export: failed to export summary");
+            } else {
+                file_count += 1;
+            }
+        }
+    }
+
+    // Export today's digest if configured.
+    if export_cfg.export_daily_digest {
+        if let Ok(Some(digest_row)) = state.query_service.get_digest(&today) {
+            let digest = engram_insight::DailyDigest {
+                id: digest_row.id,
+                digest_date: digest_row.digest_date,
+                content: serde_json::from_str(&digest_row.content).unwrap_or_default(),
+                summary_count: digest_row.summary_count,
+                entity_count: digest_row.entity_count,
+                chunk_count: digest_row.chunk_count,
+                created_at: 0,
+            };
+            if let Err(e) = exporter.export_digest(&digest) {
+                tracing::warn!(error = %e, "Export: failed to export digest");
+            } else {
+                file_count += 1;
+            }
+        }
+    }
+
+    // Export entities if configured.
+    if export_cfg.export_entities {
+        let entity_rows = state
+            .query_service
+            .get_entities(None, Some(&today), None)
+            .map_err(ApiError::from)?;
+
+        let insight_entities: Vec<engram_insight::Entity> = entity_rows
+            .iter()
+            .filter_map(|e| {
+                let entity_type = engram_insight::EntityType::parse(&e.entity_type)?;
+                Some(engram_insight::Entity {
+                    id: e.id,
+                    entity_type,
+                    value: e.value.clone(),
+                    source_chunk_id: e
+                        .source_chunk_id
+                        .as_deref()
+                        .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                        .unwrap_or_default(),
+                    source_summary_id: e
+                        .source_summary_id
+                        .as_deref()
+                        .and_then(|s| uuid::Uuid::parse_str(s).ok()),
+                    confidence: e.confidence as f32,
+                    created_at: 0,
+                })
+            })
+            .collect();
+
+        if !insight_entities.is_empty() {
+            if let Err(e) = exporter.export_entities(&insight_entities) {
+                tracing::warn!(error = %e, "Export: failed to export entities");
+            } else {
+                file_count += 1;
+            }
+        }
+    }
+
+    // Publish domain event.
+    state.publish_event(engram_core::events::DomainEvent::InsightExported {
+        path: export_cfg.vault_path.clone(),
+        format: export_cfg.format.clone(),
+        file_count,
+        timestamp: engram_core::types::Timestamp::now(),
+    });
+
+    Ok(Json(serde_json::json!({
+        "status": "completed",
+        "files_exported": file_count,
+        "vault_path": export_cfg.vault_path
+    })))
 }
 
 #[cfg(test)]

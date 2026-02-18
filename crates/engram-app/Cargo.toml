@@ -19,6 +19,7 @@ engram-ocr = { path = "../engram-ocr" }
 engram-audio = { path = "../engram-audio" }
 engram-whisper = { path = "../engram-whisper" }
 engram-dictation = { path = "../engram-dictation" }
+engram-insight = { path = "../engram-insight" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -26,6 +27,7 @@ clap = { version = "4", features = ["derive"] }
 axum = "0.8"
 uuid = { workspace = true }
 chrono = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.52", features = [

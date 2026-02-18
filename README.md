@@ -30,20 +30,21 @@ Dictation Engine ---------/      Embed         REST API (configurable port)
                                              System Tray + Webview
 ```
 
-**11 Rust crates** organized by DDD bounded contexts in a Cargo workspace:
+**12 Rust crates** organized by DDD bounded contexts in a Cargo workspace:
 
 | Crate | Purpose |
 |-------|---------|
 | `engram-core` | Shared types, config (25+ fields), error handling, domain events, PII safety gate (credit cards, SSNs, emails, phones) |
-| `engram-storage` | SQLite with WAL, FTS5 full-text search, tiered retention, migrations (v1-v3), vector metadata repository |
+| `engram-storage` | SQLite with WAL, FTS5 full-text search, tiered retention, migrations (v1-v4), vector metadata repository |
 | `engram-vector` | HNSW vector index (RuVector), ONNX embeddings, ingestion pipeline with dual-write metadata |
-| `engram-api` | axum REST API (21 endpoints), SSE streaming, auth middleware, rate limiting, dynamic CORS |
+| `engram-api` | axum REST API (27 endpoints), SSE streaming, auth middleware, rate limiting, dynamic CORS |
 | `engram-capture` | Screen capture via Win32 GDI BitBlt, multi-monitor with DPI awareness |
 | `engram-ocr` | OCR via Windows.Media.Ocr WinRT |
 | `engram-audio` | Audio capture via cpal/WASAPI, ring buffer |
 | `engram-whisper` | Whisper.cpp transcription (feature-gated) |
 | `engram-dictation` | State machine, global hotkey, text injection via SendInput |
 | `engram-ui` | Dashboard HTML (8 views), tray panel webview, system tray icon |
+| `engram-insight` | Extractive summarization, entity extraction, daily digest, topic clustering, Obsidian vault export |
 | `engram-app` | Composition root — CLI (clap), config loading, pipeline wiring |
 
 ---
@@ -65,7 +66,7 @@ cd engram
 # Build
 cargo build --release --workspace
 
-# Run tests (560 tests)
+# Run tests (648 tests)
 cargo test --workspace
 
 # Run the application
@@ -115,12 +116,12 @@ Config file at `~/.engram/config.toml` (auto-created on install). Priority: CLI 
 | **Phase 1: Critical Integration** | Complete | 241 | Audio pipeline wiring, real embeddings, dictation transcription, FTS5 injection fix, DB path fix |
 | **Phase 2: Security Hardening** | Complete | 387 | Bearer token auth, rate limiting, error sanitization, config protection, graceful shutdown, Luhn validation, file permissions, system tray wiring |
 | **Phase 3: Feature Completeness** | Complete | 560 | CLI (clap), 25+ config fields, phone PII, 3 search modes, 21 API routes, multi-monitor + DPI, webview HWND, WiX installer, `cargo deny`, criterion benchmarks, 66 integration tests |
+| **Phase 4: Summarization & Insights** | Complete | 648 | engram-insight crate, extractive summarization, regex entity extraction (URLs, dates, money, projects, people), daily digest, topic clustering, Obsidian vault export, 6 new API routes (27 total), migration v4, SSE event bus activation, deferred infrastructure (CF-1 to CF-7) |
 
 ### Upcoming Phases (PRDs Ready)
 
 | Phase | Focus |
 |-------|-------|
-| **Phase 4: Intelligent Summarization & Insight Extraction** | Auto-summarization of captured content, pattern detection, insight generation |
 | **Phase 5: Local Action Engine** | Automated actions triggered by captured context, local command execution |
 | **Phase 6: Conversational Interface** | Natural language queries over your memory, chat-based interaction |
 | **Phase 7: Workflow Automation & Integration** | Third-party app integration, automated workflows triggered by context |
@@ -131,7 +132,7 @@ Each phase has a full PRD in `docs/features/`.
 
 ---
 
-## API Endpoints (21 routes)
+## API Endpoints (27 routes)
 
 All protected endpoints require `Authorization: Bearer <token>`.
 
@@ -158,6 +159,12 @@ All protected endpoints require `Authorization: Bearer <token>`.
 | GET | `/config` | Yes | Current config |
 | PUT | `/config` | Yes | Update config |
 | POST | `/ingest` | Yes | Ingest text content |
+| GET | `/insights/daily` | Yes | Latest daily digest |
+| GET | `/insights/daily/{date}` | Yes | Digest for specific date |
+| GET | `/insights/topics` | Yes | Topic clusters |
+| GET | `/entities` | Yes | Extracted entities |
+| GET | `/summaries` | Yes | Generated summaries |
+| POST | `/insights/export` | Yes | Trigger Obsidian vault export |
 | GET | `/stream` | Yes | SSE event stream |
 
 ---
@@ -176,6 +183,7 @@ engram/
     engram-audio/         # cpal/WASAPI audio, Silero VAD
     engram-whisper/       # Whisper.cpp transcription
     engram-dictation/     # State machine, hotkey, text injection
+    engram-insight/       # Summarization, entity extraction, digest, clustering, vault export
     engram-ui/            # Dashboard HTML, tray panel webview, system tray
     engram-app/           # main.rs — CLI, config, composition root
   wix/                    # WiX installer configuration

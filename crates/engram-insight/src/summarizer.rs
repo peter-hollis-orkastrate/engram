@@ -79,7 +79,7 @@ impl SummarizationService {
 
 impl Default for SummarizationService {
     fn default() -> Self {
-        Self::new(5, 2)
+        Self::new(5, 3)
     }
 }
 

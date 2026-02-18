@@ -2,6 +2,7 @@
 name = "engram-app"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [[bin]]
 name = "engram"
@@ -25,3 +26,8 @@ clap = { version = "4", features = ["derive"] }
 axum = "0.8"
 uuid = { workspace = true }
 chrono = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_UI_HiDpi",
+] }

@@ -109,27 +109,128 @@ impl Default for WebviewConfig {
     }
 }
 
-/// Placeholder window handle that implements `HasWindowHandle`.
+/// Window handle wrapper that implements `HasWindowHandle`.
 ///
 /// Required by wry 0.48+ which uses raw-window-handle 0.6 traits.
-/// In production, this should be replaced with a real Win32 HWND
-/// obtained from `CreateWindowExW` or a windowing library.
+///
+/// On Windows, this holds a real HWND created via `CreateWindowExW`.
+/// On non-Windows, this is a stub that returns an error (webview
+/// feature is Windows-only in practice).
 #[cfg(feature = "webview")]
-struct PlaceholderWindowHandle;
+struct PlaceholderWindowHandle {
+    #[cfg(target_os = "windows")]
+    hwnd: isize,
+}
 
-#[cfg(feature = "webview")]
+#[cfg(all(feature = "webview", target_os = "windows"))]
+impl PlaceholderWindowHandle {
+    /// Create a real hidden Win32 window for webview hosting.
+    ///
+    /// Registers a minimal window class (once) and creates a frameless
+    /// popup window of the requested size. The window is initially hidden.
+    fn create_hidden_window(width: u32, height: u32) -> Result<Self, EngramError> {
+        use std::sync::Once;
+        use windows_sys::Win32::Foundation::HINSTANCE;
+        use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+        static REGISTER_CLASS: Once = Once::new();
+        // Wide-encoded class name: "EngramWebviewHost\0"
+        const CLASS_NAME: &[u16] = &[
+            b'E' as u16, b'n' as u16, b'g' as u16, b'r' as u16,
+            b'a' as u16, b'm' as u16, b'W' as u16, b'e' as u16,
+            b'b' as u16, b'v' as u16, b'i' as u16, b'e' as u16,
+            b'w' as u16, b'H' as u16, b'o' as u16, b's' as u16,
+            b't' as u16, 0,
+        ];
+
+        REGISTER_CLASS.call_once(|| {
+            // SAFETY: Registering a window class with valid pointers.
+            // DefWindowProcW is the default message handler. The class
+            // name is a static null-terminated wide string.
+            unsafe {
+                let wc = WNDCLASSEXW {
+                    cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                    style: 0,
+                    lpfnWndProc: Some(DefWindowProcW),
+                    cbClsExtra: 0,
+                    cbWndExtra: 0,
+                    hInstance: 0 as HINSTANCE,
+                    hIcon: 0,
+                    hCursor: 0,
+                    hbrBackground: 0,
+                    lpszMenuName: std::ptr::null(),
+                    lpszClassName: CLASS_NAME.as_ptr(),
+                    hIconSm: 0,
+                };
+                RegisterClassExW(&wc);
+            }
+        });
+
+        // SAFETY: CreateWindowExW is called with valid class name and
+        // dimensions. The window is created hidden (no WS_VISIBLE) as a
+        // frameless popup (WS_POPUP). Returns 0 on failure.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,                          // dwExStyle
+                CLASS_NAME.as_ptr(),        // lpClassName
+                CLASS_NAME.as_ptr(),        // lpWindowName (reuse class name)
+                WS_POPUP,                   // dwStyle: frameless, not visible
+                0,                          // x
+                0,                          // y
+                width as i32,               // nWidth
+                height as i32,              // nHeight
+                0,                          // hWndParent
+                0,                          // hMenu
+                0 as HINSTANCE,             // hInstance
+                std::ptr::null(),           // lpParam
+            )
+        };
+
+        if hwnd == 0 {
+            return Err(EngramError::Config(
+                "CreateWindowExW failed to create hidden window".into(),
+            ));
+        }
+
+        tracing::debug!(hwnd, width, height, "Created hidden Win32 window for webview");
+        Ok(Self { hwnd })
+    }
+}
+
+#[cfg(all(feature = "webview", target_os = "windows"))]
 impl wry::raw_window_handle::HasWindowHandle for PlaceholderWindowHandle {
     fn window_handle(
         &self,
     ) -> Result<wry::raw_window_handle::WindowHandle<'_>, wry::raw_window_handle::HandleError> {
         let raw = wry::raw_window_handle::RawWindowHandle::Win32(
             wry::raw_window_handle::Win32WindowHandle::new(
-                std::num::NonZeroIsize::new(1).unwrap(), // Placeholder HWND
+                // SAFETY: hwnd was returned by CreateWindowExW and is non-zero
+                // (checked in create_hidden_window). It remains valid for the
+                // lifetime of this struct.
+                std::num::NonZeroIsize::new(self.hwnd).expect("HWND must be non-zero"),
             ),
         );
-        // SAFETY: The handle is valid for the lifetime of this struct.
-        // In production, this must be a real HWND from CreateWindowExW.
+        // SAFETY: The raw handle is a valid Win32 HWND obtained from
+        // CreateWindowExW and lives as long as this struct.
         Ok(unsafe { wry::raw_window_handle::WindowHandle::borrow_raw(raw) })
+    }
+}
+
+#[cfg(all(feature = "webview", not(target_os = "windows")))]
+impl PlaceholderWindowHandle {
+    fn create_hidden_window(_width: u32, _height: u32) -> Result<Self, EngramError> {
+        Err(EngramError::Config(
+            "Webview window creation is only supported on Windows".into(),
+        ))
+    }
+}
+
+#[cfg(all(feature = "webview", not(target_os = "windows")))]
+impl wry::raw_window_handle::HasWindowHandle for PlaceholderWindowHandle {
+    fn window_handle(
+        &self,
+    ) -> Result<wry::raw_window_handle::WindowHandle<'_>, wry::raw_window_handle::HandleError> {
+        Err(wry::raw_window_handle::HandleError::NotSupported)
     }
 }
 
@@ -174,7 +275,10 @@ impl TrayPanelWebview {
         // event loop (winit, tao, or raw Win32 message pump) and use
         // a real parent HWND. This placeholder allows compilation and
         // testing of the webview pipeline without a live window.
-        let handle = PlaceholderWindowHandle;
+        let handle = PlaceholderWindowHandle::create_hidden_window(
+            self.config.width,
+            self.config.height,
+        )?;
         let _webview = WebViewBuilder::new()
             .with_html(html)
             .build_as_child(&handle)

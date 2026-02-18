@@ -2,6 +2,7 @@
 name = "engram-ui"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [features]
 default = []
@@ -15,3 +16,8 @@ wry = { version = "0.48", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tray-icon = "0.19"
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+] }

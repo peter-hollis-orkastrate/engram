@@ -1,0 +1,15 @@
+# Engram default configuration
+# See documentation for all available options.
+
+[general]
+port = 3030
+
+[screen]
+enabled = true
+capture_interval_secs = 5
+
+[audio]
+enabled = false
+
+[safety]
+redact_pii = true

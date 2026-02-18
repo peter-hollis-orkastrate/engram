@@ -2,6 +2,7 @@
 name = "engram-vector"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 engram-core = { path = "../engram-core" }
@@ -21,3 +22,8 @@ thiserror = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
+criterion = { workspace = true }
+
+[[bench]]
+name = "search_benchmarks"
+harness = false

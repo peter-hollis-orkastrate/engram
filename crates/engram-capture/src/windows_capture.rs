@@ -143,6 +143,7 @@ pub fn enumerate_monitors() -> Vec<MonitorInfo> {
     use windows_sys::Win32::Graphics::Gdi::{
         EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW,
     };
+    use windows_sys::Win32::UI::HiDpi::GetDpiForMonitor;
 
     // Accumulate monitors via the callback.
     static MONITORS: Mutex<Vec<MonitorInfo>> = Mutex::new(Vec::new());
@@ -171,8 +172,21 @@ pub fn enumerate_monitors() -> Vec<MonitorInfo> {
                 &info.szDevice[..info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len())],
             );
 
-            // DPI — default to 96 if unavailable.
-            let dpi = 96u32;
+            // Query real DPI for this monitor via GetDpiForMonitor.
+            // Falls back to 96 if the call fails.
+            let dpi = {
+                let mut dpi_x: u32 = 0;
+                let mut dpi_y: u32 = 0;
+                // SAFETY: GetDpiForMonitor is called with a valid monitor
+                // handle from the EnumDisplayMonitors callback. MDT_EFFECTIVE_DPI (0)
+                // returns the effective DPI for the monitor.
+                let hr = GetDpiForMonitor(hmonitor, 0, &mut dpi_x, &mut dpi_y);
+                if hr == 0 && dpi_x > 0 {
+                    dpi_x
+                } else {
+                    96u32
+                }
+            };
 
             let mut guard = MONITORS.lock().unwrap();
             let index = guard.len();
@@ -213,6 +227,9 @@ pub struct CaptureConfig {
     /// Capture FPS. When capturing all monitors, FPS is divided by monitor
     /// count.
     pub fps: f64,
+    /// DPI of the target monitor (default 96). When > 96, capture
+    /// dimensions are scaled by `dpi / 96` to account for HiDPI displays.
+    pub dpi: u32,
 }
 
 impl Default for CaptureConfig {
@@ -222,6 +239,7 @@ impl Default for CaptureConfig {
             save_screenshots: false,
             monitor_index: 0,
             fps: 1.0,
+            dpi: 96,
         }
     }
 }
@@ -253,9 +271,17 @@ impl WindowsCaptureService {
 // Windows implementation
 // =============================================================================
 
+/// DPI value used by the capture function to scale dimensions.
+/// Set by the `CaptureService` implementation before each capture.
+#[cfg(target_os = "windows")]
+static DPI_FOR_CAPTURE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(96);
+
 #[cfg(target_os = "windows")]
 impl CaptureService for WindowsCaptureService {
     async fn capture_frame(&self) -> Result<ScreenFrame, EngramError> {
+        // Store DPI for the capture function to use for dimension scaling.
+        DPI_FOR_CAPTURE.store(self.config.dpi, std::sync::atomic::Ordering::Relaxed);
+
         let (app_name, window_title) = unsafe { get_foreground_window_info() };
 
         // Capture screenshot as BMP bytes in memory.
@@ -350,8 +376,23 @@ unsafe fn capture_screen_to_bmp_bytes() -> Result<Vec<u8>, EngramError> {
         return Err(EngramError::Capture("Failed to get screen DC".into()));
     }
 
-    let width = GetSystemMetrics(SM_CXSCREEN);
-    let height = GetSystemMetrics(SM_CYSCREEN);
+    let raw_width = GetSystemMetrics(SM_CXSCREEN);
+    let raw_height = GetSystemMetrics(SM_CYSCREEN);
+
+    // Scale capture dimensions for HiDPI monitors. GetSystemMetrics
+    // returns logical pixels; multiply by dpi/96 to get physical pixels
+    // when DPI awareness is enabled.
+    let dpi = DPI_FOR_CAPTURE.load(std::sync::atomic::Ordering::Relaxed);
+    let (width, height) = if dpi > 96 {
+        let scale_num = dpi as i32;
+        let scale_den = 96i32;
+        (
+            raw_width * scale_num / scale_den,
+            raw_height * scale_num / scale_den,
+        )
+    } else {
+        (raw_width, raw_height)
+    };
 
     let hdc_mem = CreateCompatibleDC(hdc_screen);
     let hbm = CreateCompatibleBitmap(hdc_screen, width, height);
@@ -461,6 +502,7 @@ mod tests {
             save_screenshots: true,
             monitor_index: 1,
             fps: 2.0,
+            dpi: 96,
         };
         let service = WindowsCaptureService::new(config);
         assert_eq!(
@@ -488,6 +530,7 @@ mod tests {
             save_screenshots: false,
             monitor_index: 2,
             fps: 0.5,
+            dpi: 144,
         };
         assert_eq!(config.screenshot_dir, PathBuf::from("custom/dir"));
         assert_eq!(config.monitor_index, 2);

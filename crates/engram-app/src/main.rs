@@ -443,6 +443,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    // On Windows, enable per-monitor DPI awareness so that GetSystemMetrics
+    // and other Win32 calls return physical pixels rather than scaled values.
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::HiDpi::{
+            SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        };
+        // SAFETY: SetProcessDpiAwarenessContext is called once at startup
+        // before any window or DC creation. It is safe to call with the
+        // well-known constant DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2.
+        unsafe {
+            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
+    }
+
     let app_start_time = Instant::now();
     tracing::info!("Starting Engram v{}", env!("CARGO_PKG_VERSION"));
 
@@ -574,11 +589,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from("data/screenshots")
     };
 
+    // Enumerate monitors to get the primary monitor DPI for capture scaling.
+    let primary_dpi = {
+        let monitors = engram_capture::enumerate_monitors();
+        monitors
+            .iter()
+            .find(|m| m.is_primary)
+            .or(monitors.first())
+            .map(|m| m.dpi)
+            .unwrap_or(96)
+    };
+
     let capture_cfg = CaptureConfig {
         screenshot_dir: screenshot_dir.clone(),
         save_screenshots: config.screen.save_screenshots,
         monitor_index: 0,
         fps: config.screen.fps,
+        dpi: primary_dpi,
     };
 
     if config.screen.save_screenshots {

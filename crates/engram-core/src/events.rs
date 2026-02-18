@@ -256,6 +256,47 @@ pub enum DomainEvent {
         reason: String,
         timestamp: Timestamp,
     },
+
+    // =========================================================================
+    // Insight Pipeline Events
+    // =========================================================================
+    /// A summary was generated from a batch of chunks.
+    SummaryGenerated {
+        summary_id: Uuid,
+        chunk_count: u32,
+        source_app: Option<String>,
+        timestamp: Timestamp,
+    },
+
+    /// Entities were extracted from text content.
+    EntitiesExtracted {
+        entity_count: u32,
+        entity_types: Vec<String>,
+        timestamp: Timestamp,
+    },
+
+    /// A daily digest was generated.
+    DailyDigestGenerated {
+        date: String,
+        summary_count: u32,
+        entity_count: u32,
+        timestamp: Timestamp,
+    },
+
+    /// Topics were clustered from summaries.
+    TopicClustered {
+        cluster_count: u32,
+        summary_count: u32,
+        timestamp: Timestamp,
+    },
+
+    /// Insights were exported to an external format/vault.
+    InsightExported {
+        path: String,
+        format: String,
+        file_count: u32,
+        timestamp: Timestamp,
+    },
 }
 
 impl DomainEvent {
@@ -291,7 +332,12 @@ impl DomainEvent {
             | DomainEvent::ConfigUpdated { timestamp, .. }
             | DomainEvent::ApplicationStarted { timestamp, .. }
             | DomainEvent::ApplicationShutdown { timestamp, .. }
-            | DomainEvent::ComponentHealthChanged { timestamp, .. } => *timestamp,
+            | DomainEvent::ComponentHealthChanged { timestamp, .. }
+            | DomainEvent::SummaryGenerated { timestamp, .. }
+            | DomainEvent::EntitiesExtracted { timestamp, .. }
+            | DomainEvent::DailyDigestGenerated { timestamp, .. }
+            | DomainEvent::TopicClustered { timestamp, .. }
+            | DomainEvent::InsightExported { timestamp, .. } => *timestamp,
         }
     }
 
@@ -340,6 +386,11 @@ impl DomainEvent {
             DomainEvent::ApplicationStarted { .. } => "application_started",
             DomainEvent::ApplicationShutdown { .. } => "application_shutdown",
             DomainEvent::ComponentHealthChanged { .. } => "component_health_changed",
+            DomainEvent::SummaryGenerated { .. } => "summary_generated",
+            DomainEvent::EntitiesExtracted { .. } => "entities_extracted",
+            DomainEvent::DailyDigestGenerated { .. } => "daily_digest_generated",
+            DomainEvent::TopicClustered { .. } => "topic_clustered",
+            DomainEvent::InsightExported { .. } => "insight_exported",
         }
     }
 }
@@ -738,6 +789,34 @@ mod tests {
                 reason: "ok".to_string(),
                 timestamp: ts,
             },
+            DomainEvent::SummaryGenerated {
+                summary_id: id,
+                chunk_count: 5,
+                source_app: Some("Chrome".to_string()),
+                timestamp: ts,
+            },
+            DomainEvent::EntitiesExtracted {
+                entity_count: 3,
+                entity_types: vec!["person".to_string()],
+                timestamp: ts,
+            },
+            DomainEvent::DailyDigestGenerated {
+                date: "2026-02-18".to_string(),
+                summary_count: 10,
+                entity_count: 25,
+                timestamp: ts,
+            },
+            DomainEvent::TopicClustered {
+                cluster_count: 4,
+                summary_count: 10,
+                timestamp: ts,
+            },
+            DomainEvent::InsightExported {
+                path: "/vault/daily".to_string(),
+                format: "obsidian".to_string(),
+                file_count: 3,
+                timestamp: ts,
+            },
         ];
 
         for event in &events {
@@ -948,6 +1027,34 @@ mod tests {
                 reason: "crashed".to_string(),
                 timestamp: ts,
             },
+            DomainEvent::SummaryGenerated {
+                summary_id: id,
+                chunk_count: 5,
+                source_app: None,
+                timestamp: ts,
+            },
+            DomainEvent::EntitiesExtracted {
+                entity_count: 2,
+                entity_types: vec!["url".to_string(), "date".to_string()],
+                timestamp: ts,
+            },
+            DomainEvent::DailyDigestGenerated {
+                date: "2026-02-18".to_string(),
+                summary_count: 8,
+                entity_count: 15,
+                timestamp: ts,
+            },
+            DomainEvent::TopicClustered {
+                cluster_count: 3,
+                summary_count: 7,
+                timestamp: ts,
+            },
+            DomainEvent::InsightExported {
+                path: "/vault".to_string(),
+                format: "obsidian".to_string(),
+                file_count: 5,
+                timestamp: ts,
+            },
         ];
 
         for event in &events {
@@ -960,6 +1067,89 @@ mod tests {
                 "Debug output too short for {:?}",
                 event.event_name()
             );
+        }
+    }
+
+    #[test]
+    fn test_insight_event_serialization() {
+        let ts = Timestamp::now();
+        let id = Uuid::new_v4();
+
+        // SummaryGenerated
+        let event = DomainEvent::SummaryGenerated {
+            summary_id: id,
+            chunk_count: 5,
+            source_app: Some("Chrome".to_string()),
+            timestamp: ts,
+        };
+        assert_eq!(event.event_name(), "summary_generated");
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(rt.event_name(), "summary_generated");
+        assert_eq!(rt.timestamp(), ts);
+
+        // EntitiesExtracted
+        let event = DomainEvent::EntitiesExtracted {
+            entity_count: 3,
+            entity_types: vec!["person".to_string(), "url".to_string()],
+            timestamp: ts,
+        };
+        assert_eq!(event.event_name(), "entities_extracted");
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(rt.event_name(), "entities_extracted");
+
+        // DailyDigestGenerated
+        let event = DomainEvent::DailyDigestGenerated {
+            date: "2026-02-18".to_string(),
+            summary_count: 10,
+            entity_count: 25,
+            timestamp: ts,
+        };
+        assert_eq!(event.event_name(), "daily_digest_generated");
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(rt.event_name(), "daily_digest_generated");
+
+        // TopicClustered
+        let event = DomainEvent::TopicClustered {
+            cluster_count: 4,
+            summary_count: 10,
+            timestamp: ts,
+        };
+        assert_eq!(event.event_name(), "topic_clustered");
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(rt.event_name(), "topic_clustered");
+
+        // InsightExported
+        let event = DomainEvent::InsightExported {
+            path: "/vault/daily".to_string(),
+            format: "obsidian".to_string(),
+            file_count: 3,
+            timestamp: ts,
+        };
+        assert_eq!(event.event_name(), "insight_exported");
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(rt.event_name(), "insight_exported");
+    }
+
+    #[test]
+    fn test_summary_generated_none_source_app() {
+        let ts = Timestamp::now();
+        let event = DomainEvent::SummaryGenerated {
+            summary_id: Uuid::new_v4(),
+            chunk_count: 3,
+            source_app: None,
+            timestamp: ts,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        if let DomainEvent::SummaryGenerated { source_app, .. } = &rt {
+            assert!(source_app.is_none());
+        } else {
+            panic!("Expected SummaryGenerated variant");
         }
     }
 
@@ -1056,7 +1246,7 @@ mod tests {
     }
 
     #[test]
-    fn test_domain_event_count_is_30() {
+    fn test_domain_event_count_is_35() {
         // Create one of each variant to verify count
         let ts = Timestamp::now();
         let id = Uuid::new_v4();
@@ -1098,7 +1288,13 @@ mod tests {
             DomainEvent::ApplicationStarted { version: "1".to_string(), config_path: "/".to_string(), timestamp: ts },
             DomainEvent::ApplicationShutdown { uptime_secs: 1, clean_exit: true, timestamp: ts },
             DomainEvent::ComponentHealthChanged { component: "c".to_string(), healthy: true, reason: "ok".to_string(), timestamp: ts },
+            // Insight pipeline events
+            DomainEvent::SummaryGenerated { summary_id: id, chunk_count: 5, source_app: Some("Chrome".to_string()), timestamp: ts },
+            DomainEvent::EntitiesExtracted { entity_count: 3, entity_types: vec!["person".to_string(), "url".to_string()], timestamp: ts },
+            DomainEvent::DailyDigestGenerated { date: "2026-02-18".to_string(), summary_count: 10, entity_count: 25, timestamp: ts },
+            DomainEvent::TopicClustered { cluster_count: 4, summary_count: 10, timestamp: ts },
+            DomainEvent::InsightExported { path: "/vault".to_string(), format: "obsidian".to_string(), file_count: 3, timestamp: ts },
         ];
-        assert_eq!(events.len(), 30);
+        assert_eq!(events.len(), 35);
     }
 }

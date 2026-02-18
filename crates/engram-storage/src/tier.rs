@@ -318,6 +318,66 @@ mod tests {
     }
 
     #[test]
+    fn test_purge_skips_referenced_chunks() {
+        let db = Database::in_memory().unwrap();
+        // 90 days ago — past cold retention (2x warm_days = 60 days).
+        let ancient_ts = Utc::now().timestamp() - (90 * 86400);
+
+        db.with_conn(|conn| {
+            // Insert two ancient cold records.
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, tier)
+                 VALUES ('cold-referenced', 'screen', ?1, 'referenced text', 'cold')",
+                rusqlite::params![ancient_ts],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+            conn.execute(
+                "INSERT INTO captures (id, content_type, timestamp, text, tier)
+                 VALUES ('cold-orphan', 'screen', ?1, 'orphan text', 'cold')",
+                rusqlite::params![ancient_ts],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+
+            // Reference one of them in summaries.
+            conn.execute(
+                "INSERT INTO summaries (id, source_chunk_ids) VALUES ('sum-1', ?1)",
+                rusqlite::params![r#"["cold-referenced"]"#],
+            )
+            .map_err(|e| EngramError::Storage(e.to_string()))?;
+
+            Ok(())
+        })
+        .unwrap();
+
+        let config = default_config();
+        let result = TierManager::run_purge(&db, &config).unwrap();
+        // Only the orphan should be deleted; the referenced one should survive.
+        assert_eq!(result.records_deleted, 1);
+
+        db.with_conn(|conn| {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM captures WHERE id = 'cold-referenced'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+            assert_eq!(count, 1, "Referenced chunk should be preserved");
+
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM captures WHERE id = 'cold-orphan'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| EngramError::Storage(e.to_string()))?;
+            assert_eq!(count, 0, "Orphan chunk should be deleted");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn test_purge_deletes_old_cold_records() {
         let db = Database::in_memory().unwrap();
         // 90 days ago — well past 2x warm_days (60 days).

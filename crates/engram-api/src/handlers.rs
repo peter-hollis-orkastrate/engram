@@ -2210,4 +2210,24 @@ mod tests {
         // text field should be omitted when None due to skip_serializing_if.
         assert!(!json.contains("\"text\""));
     }
+
+    #[tokio::test]
+    async fn test_publish_event_multiple_subscribers() {
+        let state = make_state();
+        let mut rx1 = state.event_tx.subscribe();
+        let mut rx2 = state.event_tx.subscribe();
+
+        state.publish_event(engram_core::events::DomainEvent::ApplicationStarted {
+            version: "0.1.0".to_string(),
+            config_path: "/test".to_string(),
+            timestamp: engram_core::types::Timestamp::now(),
+        });
+
+        let val1 = rx1.recv().await.unwrap();
+        let val2 = rx2.recv().await.unwrap();
+
+        assert_eq!(val1["event"], "application_started");
+        assert_eq!(val2["event"], "application_started");
+        assert_eq!(val1, val2);
+    }
 }

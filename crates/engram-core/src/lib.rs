@@ -4,7 +4,7 @@ pub mod events;
 pub mod safety;
 pub mod types;
 
-pub use config::EngramConfig;
+pub use config::{EngramConfig, InsightConfig, InsightExportConfig};
 pub use error::{EngramError, Result};
 pub use safety::{PiiMatch, PiiType, SafetyDecision, SafetyGate};
 pub use types::*;

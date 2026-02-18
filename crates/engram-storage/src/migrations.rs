@@ -46,6 +46,11 @@ pub fn run_migrations(conn: &Connection) -> Result<(), EngramError> {
         info!("Applied migration v3: vectors_metadata_and_config");
     }
 
+    if current_version < 4 {
+        apply_v4(conn)?;
+        info!("Applied migration v4: insight_pipeline_tables");
+    }
+
     Ok(())
 }
 
@@ -271,6 +276,78 @@ fn apply_v3(conn: &Connection) -> Result<(), EngramError> {
     Ok(())
 }
 
+/// Version 4: Insight pipeline tables.
+///
+/// Creates tables for summaries, entities, daily digests, and topic clusters.
+fn apply_v4(conn: &Connection) -> Result<(), EngramError> {
+    conn.execute_batch(
+        "
+        -- Summaries generated from batches of chunks.
+        CREATE TABLE IF NOT EXISTS summaries (
+            id                  TEXT PRIMARY KEY NOT NULL,
+            title               TEXT NOT NULL DEFAULT '',
+            bullet_points       TEXT NOT NULL DEFAULT '[]',
+            source_chunk_ids    TEXT NOT NULL DEFAULT '[]',
+            source_app          TEXT,
+            time_range_start    TEXT,
+            time_range_end      TEXT,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- Extracted entities (people, URLs, dates, money, projects).
+        CREATE TABLE IF NOT EXISTS entities (
+            id                  TEXT PRIMARY KEY NOT NULL,
+            entity_type         TEXT NOT NULL,
+            value               TEXT NOT NULL DEFAULT '',
+            source_chunk_id     TEXT,
+            source_summary_id   TEXT,
+            confidence          REAL NOT NULL DEFAULT 1.0,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- Daily digest reports.
+        CREATE TABLE IF NOT EXISTS daily_digests (
+            id                  TEXT PRIMARY KEY NOT NULL,
+            digest_date         TEXT NOT NULL UNIQUE,
+            content             TEXT NOT NULL DEFAULT '{}',
+            summary_count       INTEGER NOT NULL DEFAULT 0,
+            entity_count        INTEGER NOT NULL DEFAULT 0,
+            chunk_count         INTEGER NOT NULL DEFAULT 0,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- Topic clusters grouping related summaries.
+        CREATE TABLE IF NOT EXISTS topic_clusters (
+            id                  TEXT PRIMARY KEY NOT NULL,
+            label               TEXT NOT NULL DEFAULT '',
+            summary_ids         TEXT NOT NULL DEFAULT '[]',
+            centroid_embedding  BLOB,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- Indexes for efficient querying.
+        CREATE INDEX IF NOT EXISTS idx_entities_type
+            ON entities (entity_type);
+
+        CREATE INDEX IF NOT EXISTS idx_entities_chunk
+            ON entities (source_chunk_id);
+
+        CREATE INDEX IF NOT EXISTS idx_summaries_date
+            ON summaries (created_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_summaries_app
+            ON summaries (source_app)
+            WHERE source_app IS NOT NULL;
+
+        -- Record migration.
+        INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (4, 'insight_pipeline_tables');
+        ",
+    )
+    .map_err(|e| EngramError::Storage(format!("Failed to apply migration v4: {}", e)))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,7 +371,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
     }
 
     #[test]
@@ -492,6 +569,158 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    // =========================================================================
+    // V4: Insight pipeline tables
+    // =========================================================================
+
+    #[test]
+    fn test_v4_summaries_table() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO summaries (id, title, bullet_points, source_chunk_ids, source_app, time_range_start, time_range_end)
+             VALUES ('sum-1', 'Test Summary', '[\"bullet1\",\"bullet2\"]', '[\"chunk-1\",\"chunk-2\"]', 'Chrome', '2026-02-18T10:00:00', '2026-02-18T11:00:00')",
+            [],
+        )
+        .unwrap();
+
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM summaries WHERE id = 'sum-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(title, "Test Summary");
+    }
+
+    #[test]
+    fn test_v4_entities_table() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO entities (id, entity_type, value, source_chunk_id, confidence)
+             VALUES ('ent-1', 'person', 'Alice Smith', 'chunk-1', 0.95)",
+            [],
+        )
+        .unwrap();
+
+        let value: String = conn
+            .query_row(
+                "SELECT value FROM entities WHERE id = 'ent-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "Alice Smith");
+
+        let confidence: f64 = conn
+            .query_row(
+                "SELECT confidence FROM entities WHERE id = 'ent-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!((confidence - 0.95).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_v4_daily_digests_table() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO daily_digests (id, digest_date, content, summary_count, entity_count, chunk_count)
+             VALUES ('dig-1', '2026-02-18', '{\"key\": \"value\"}', 10, 25, 100)",
+            [],
+        )
+        .unwrap();
+
+        let summary_count: i64 = conn
+            .query_row(
+                "SELECT summary_count FROM daily_digests WHERE digest_date = '2026-02-18'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(summary_count, 10);
+    }
+
+    #[test]
+    fn test_v4_daily_digests_unique_date() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO daily_digests (id, digest_date, content) VALUES ('dig-1', '2026-02-18', '{}')",
+            [],
+        )
+        .unwrap();
+
+        let result = conn.execute(
+            "INSERT INTO daily_digests (id, digest_date, content) VALUES ('dig-2', '2026-02-18', '{}')",
+            [],
+        );
+        assert!(result.is_err(), "digest_date should be UNIQUE");
+    }
+
+    #[test]
+    fn test_v4_topic_clusters_table() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO topic_clusters (id, label, summary_ids)
+             VALUES ('clus-1', 'Work Meetings', '[\"sum-1\",\"sum-2\"]')",
+            [],
+        )
+        .unwrap();
+
+        let label: String = conn
+            .query_row(
+                "SELECT label FROM topic_clusters WHERE id = 'clus-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(label, "Work Meetings");
+    }
+
+    #[test]
+    fn test_v4_indexes_exist() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        // Verify indexes were created by querying sqlite_master.
+        let index_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN (
+                    'idx_entities_type', 'idx_entities_chunk', 'idx_summaries_date', 'idx_summaries_app'
+                )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_count, 4);
+    }
+
+    #[test]
+    fn test_v4_migration_version_recorded() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 4",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "insight_pipeline_tables");
     }
 
     #[test]

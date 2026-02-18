@@ -1182,6 +1182,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "engram-insight"
+version = "0.1.0"
+dependencies = [
+ "engram-core",
+ "engram-storage",
+ "engram-vector",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "engram-ocr"
 version = "0.1.0"
 dependencies = [

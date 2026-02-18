@@ -429,7 +429,7 @@ mod tests {
 
         let search = FtsSearch::new(db);
         // "hello OR goodbye" should be treated as literal, not FTS5 OR
-        let results = search.search("hello OR goodbye", 10).unwrap();
+        let _results = search.search("hello OR goodbye", 10).unwrap();
         // With sanitization, "OR" is quoted and treated literally
         // Should not match both records via FTS5 OR semantics
     }
@@ -439,7 +439,7 @@ mod tests {
         let db = make_db();
         insert_capture(&db, "screen", "foo bar baz", "Chrome");
         let search = FtsSearch::new(db);
-        let results = search.search("foo NEAR bar", 10).unwrap();
+        let _results = search.search("foo NEAR bar", 10).unwrap();
         // Should be treated as literal search, not FTS5 NEAR
     }
 
@@ -449,7 +449,7 @@ mod tests {
         insert_capture(&db, "screen", "test data", "Chrome");
         let search = FtsSearch::new(db);
         // "app_name:Chrome" should be treated as literal text
-        let results = search.search("app_name:Chrome", 10).unwrap();
+        let _results = search.search("app_name:Chrome", 10).unwrap();
         // Should search for the literal text "app_name:Chrome"
     }
 
@@ -458,7 +458,7 @@ mod tests {
         let db = make_db();
         insert_capture(&db, "screen", "testing", "Chrome");
         let search = FtsSearch::new(db);
-        let results = search.search("test*", 10).unwrap();
+        let _results = search.search("test*", 10).unwrap();
         // Sanitized: "test*" is quoted, no prefix matching
     }
 

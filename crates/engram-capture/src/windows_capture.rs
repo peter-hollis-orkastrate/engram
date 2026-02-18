@@ -141,7 +141,7 @@ pub fn enumerate_monitors() -> Vec<MonitorInfo> {
 pub fn enumerate_monitors() -> Vec<MonitorInfo> {
     use std::sync::Mutex;
     use windows_sys::Win32::Graphics::Gdi::{
-        EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
+        EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW,
     };
 
     // Accumulate monitors via the callback.

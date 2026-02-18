@@ -39,9 +39,13 @@ impl IntentDetector {
             return vec![];
         }
 
-        // Truncate to max length
+        // Truncate to max length (char-boundary safe for multi-byte UTF-8)
         let text = if text.len() > MAX_TEXT_LEN {
-            &text[..MAX_TEXT_LEN]
+            let mut end = MAX_TEXT_LEN;
+            while !text.is_char_boundary(end) && end > 0 {
+                end -= 1;
+            }
+            &text[..end]
         } else {
             text
         };
@@ -262,6 +266,16 @@ mod tests {
                 "Non-reminder should not have extracted time"
             );
         }
+    }
+
+    #[test]
+    fn test_utf8_truncation_safety() {
+        let detector = default_detector();
+        // Create text with multi-byte chars that straddles MAX_TEXT_LEN boundary
+        let base = "x".repeat(10_238);
+        let text = format!("remind me to call Bob {}\u{00E9}\u{00E9}", base);
+        // Should not panic
+        let _intents = detector.detect(&text, Uuid::new_v4());
     }
 
     #[test]

@@ -575,11 +575,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(engram_action::ConfirmationGate::new(action_config.clone()));
     let mut action_registry = engram_action::ActionRegistry::new();
     action_registry.register_defaults();
-    let action_orchestrator = Arc::new(engram_action::Orchestrator::new(
-        action_registry,
-        Arc::clone(&action_task_store),
-        action_config.clone(),
-    ));
+    let action_orchestrator = Arc::new(
+        engram_action::Orchestrator::new(
+            action_registry,
+            Arc::clone(&action_task_store),
+            action_config.clone(),
+        )
+        .with_event_tx(state.event_tx.clone()),
+    );
 
     let state = state.with_action_engine(
         Arc::clone(&action_task_store),
@@ -588,8 +591,102 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         action_config.clone(),
     );
 
-    // Intent detector (available for production event-bus subscription)
-    let _intent_detector = engram_action::intent::IntentDetector::new(action_config.clone());
+    // Intent detector for automatic detection on new chunks
+    let intent_detector = engram_action::intent::IntentDetector::new(action_config.clone());
+
+    // Wire intent detector to event bus for automatic detection on new chunks
+    if action_config.enabled {
+        let intent_event_rx = state.event_tx.subscribe();
+        let intent_task_store = Arc::clone(&action_task_store);
+        let intent_state = state.clone();
+        tokio::spawn(async move {
+            use tokio_stream::wrappers::BroadcastStream;
+            use tokio_stream::StreamExt;
+            let mut stream = BroadcastStream::new(intent_event_rx);
+            while let Some(Ok(event_json)) = stream.next().await {
+                // Check if this is a ChunkStored event
+                let event_name = event_json
+                    .get("event")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if event_name == "chunk_stored" || event_name == "summary_generated" {
+                    // Extract text from the event
+                    if let Some(text) = event_json.get("text").and_then(|v| v.as_str()) {
+                        let chunk_id = event_json
+                            .get("chunk_id")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                            .unwrap_or_else(uuid::Uuid::new_v4);
+
+                        let intents = intent_detector.detect(text, chunk_id);
+                        for intent in &intents {
+                            // Emit IntentDetected event
+                            intent_state.publish_event(
+                                engram_core::events::DomainEvent::IntentDetected {
+                                    intent_id: intent.id,
+                                    intent_type: intent.intent_type.to_string(),
+                                    confidence: intent.confidence,
+                                    source_chunk_id: intent.source_chunk_id,
+                                    timestamp: engram_core::types::Timestamp::now(),
+                                },
+                            );
+
+                            // Create task from intent
+                            let action_type = match intent.intent_type {
+                                engram_action::IntentType::Reminder => {
+                                    engram_action::ActionType::Reminder
+                                }
+                                engram_action::IntentType::Task => {
+                                    engram_action::ActionType::QuickNote
+                                }
+                                engram_action::IntentType::UrlAction => {
+                                    engram_action::ActionType::UrlOpen
+                                }
+                                engram_action::IntentType::Command => {
+                                    engram_action::ActionType::ShellCommand
+                                }
+                                _ => continue, // Skip Question and Note types
+                            };
+
+                            let payload = serde_json::json!({
+                                "message": intent.extracted_action,
+                                "text": intent.extracted_action,
+                                "url": if intent.intent_type == engram_action::IntentType::UrlAction {
+                                    intent.extracted_action.clone()
+                                } else {
+                                    String::new()
+                                },
+                                "command": if intent.intent_type == engram_action::IntentType::Command {
+                                    intent.extracted_action.clone()
+                                } else {
+                                    String::new()
+                                },
+                            });
+
+                            if let Ok(task) = intent_task_store.create(
+                                intent.extracted_action.clone(),
+                                action_type,
+                                payload.to_string(),
+                                Some(intent.id),
+                                Some(intent.source_chunk_id),
+                                intent.extracted_time,
+                            ) {
+                                intent_state.publish_event(
+                                    engram_core::events::DomainEvent::TaskCreated {
+                                        task_id: task.id,
+                                        action_type: task.action_type.to_string(),
+                                        source: format!("intent:{}", intent.id),
+                                        timestamp: engram_core::types::Timestamp::now(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        tracing::info!("Intent detector wired to event bus");
+    }
 
     // Scheduler background task
     if action_config.enabled {

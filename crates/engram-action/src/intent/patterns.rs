@@ -304,7 +304,7 @@ impl PatternSet {
             }
         }
 
-        matches.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+        matches.sort_by(|a, b| b.confidence.total_cmp(&a.confidence));
         matches
     }
 }
@@ -314,11 +314,14 @@ impl PatternSet {
 /// Phrases like "I remembered when..." or "I was reminded about..."
 /// should not trigger intent detection.
 fn is_past_tense_false_positive(text: &str, _matched: &str) -> bool {
-    let past_tense = Regex::new(
-        r"(?i)\b(?:remembered|reminded|recalled|forgot|noted)\s+(?:that|when|how|about|the)\b",
-    )
-    .expect("Invalid past-tense regex");
-
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let past_tense = RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)\b(?:remembered|reminded|recalled|forgot|noted)\s+(?:that|when|how|about|the)\b",
+        )
+        .expect("Invalid past-tense regex")
+    });
     past_tense.is_match(text)
 }
 

@@ -15,6 +15,7 @@ pub struct Orchestrator {
     registry: ActionRegistry,
     task_store: Arc<TaskStore>,
     config: ActionConfig,
+    event_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
 }
 
 impl Orchestrator {
@@ -24,6 +25,20 @@ impl Orchestrator {
             registry,
             task_store,
             config,
+            event_tx: None,
+        }
+    }
+
+    /// Attach an event broadcast sender for domain event emission.
+    pub fn with_event_tx(mut self, tx: tokio::sync::broadcast::Sender<serde_json::Value>) -> Self {
+        self.event_tx = Some(tx);
+        self
+    }
+
+    /// Publish a domain event if an event sender is configured.
+    fn publish_event(&self, event: engram_core::events::DomainEvent) {
+        if let Some(ref tx) = self.event_tx {
+            let _ = tx.send(event.to_json());
         }
     }
 
@@ -52,6 +67,12 @@ impl Orchestrator {
 
         if needs_confirmation {
             // Route to ConfirmationGate (caller is responsible for that)
+            self.publish_event(engram_core::events::DomainEvent::ActionQueued {
+                task_id,
+                action_type: task.action_type.to_string(),
+                scheduled_at: None,
+                timestamp: engram_core::types::Timestamp::now(),
+            });
             return Ok(());
         }
 
@@ -59,6 +80,12 @@ impl Orchestrator {
         match handler.execute(&payload).await {
             Ok(_result) => {
                 let _ = self.task_store.update_status(task_id, TaskStatus::Done);
+                self.publish_event(engram_core::events::DomainEvent::ActionExecuted {
+                    task_id,
+                    action_type: task.action_type.to_string(),
+                    result: "success".to_string(),
+                    timestamp: engram_core::types::Timestamp::now(),
+                });
                 Ok(())
             }
             Err(first_err) => {
@@ -67,10 +94,22 @@ impl Orchestrator {
                 match handler.execute(&payload).await {
                     Ok(_) => {
                         let _ = self.task_store.update_status(task_id, TaskStatus::Done);
+                        self.publish_event(engram_core::events::DomainEvent::ActionExecuted {
+                            task_id,
+                            action_type: task.action_type.to_string(),
+                            result: "success_after_retry".to_string(),
+                            timestamp: engram_core::types::Timestamp::now(),
+                        });
                         Ok(())
                     }
                     Err(_) => {
                         let _ = self.task_store.update_status(task_id, TaskStatus::Failed);
+                        self.publish_event(engram_core::events::DomainEvent::ActionFailed {
+                            task_id,
+                            action_type: task.action_type.to_string(),
+                            error: first_err.to_string(),
+                            timestamp: engram_core::types::Timestamp::now(),
+                        });
                         Err(first_err)
                     }
                 }

@@ -104,7 +104,7 @@ impl AppState {
             registry.register_defaults();
             Arc::new(engram_action::Orchestrator::new(
                 registry,
-                Arc::new(engram_action::TaskStore::new()),
+                Arc::clone(&task_store),
                 action_config.clone(),
             ))
         };

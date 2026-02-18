@@ -601,20 +601,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let intent_state = state.clone();
         tokio::spawn(async move {
             use tokio_stream::wrappers::BroadcastStream;
-            use tokio_stream::StreamExt;
+            use tokio_stream::StreamExt as _;
             let mut stream = BroadcastStream::new(intent_event_rx);
             while let Some(Ok(event_json)) = stream.next().await {
                 // Check if this is a ChunkStored event
-                let event_name = event_json
+                let event_name: &str = event_json
                     .get("event")
-                    .and_then(|v| v.as_str())
+                    .and_then(|v: &serde_json::Value| v.as_str())
                     .unwrap_or("");
                 if event_name == "chunk_stored" || event_name == "summary_generated" {
                     // Extract text from the event
-                    if let Some(text) = event_json.get("text").and_then(|v| v.as_str()) {
+                    if let Some(text) = event_json.get("text").and_then(|v: &serde_json::Value| v.as_str()) {
                         let chunk_id = event_json
                             .get("chunk_id")
-                            .and_then(|v| v.as_str())
+                            .and_then(|v: &serde_json::Value| v.as_str())
                             .and_then(|s| uuid::Uuid::parse_str(s).ok())
                             .unwrap_or_else(uuid::Uuid::new_v4);
 

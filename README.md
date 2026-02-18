@@ -13,6 +13,8 @@ Engram runs quietly in your system tray, capturing what's on your screen and wha
 - **Dictation** — Global hotkey (Ctrl+Shift+D) activates voice-to-text, injecting transcribed text into the active window
 - **Semantic Search** — HNSW vector search (RuVector) + FTS5 full-text search with hybrid ranking, plus raw FTS and semantic-only modes
 - **Privacy First** — PII redaction (credit cards, SSNs, emails, phone numbers) before storage, localhost-only API with Bearer token auth, no network connections
+- **Summarization & Insights** — Extractive summarization, entity extraction (URLs, dates, money, projects, people), daily digests, topic clustering, Obsidian vault export
+- **Action Engine** — Intent detection from captured text (80+ regex patterns), task lifecycle management (7-state machine), safety-gated action execution with confirmation flow
 - **Dashboard** — 8-tab web dashboard at `/ui` with real-time search, timeline, app activity, and storage management
 
 ## Architecture
@@ -23,28 +25,33 @@ Screen Capture (1 FPS) ----\
 Audio Capture (WASAPI) -------> EngramPipeline --> SQLite + HNSW Vector Store
   VAD -> Whisper            /   (Safety Gate       |
                            /     Dedup              v
-Dictation Engine ---------/      Embed         REST API (configurable port)
+Dictation Engine ---------/      Embed         REST API (:3030, 37 endpoints)
   (Ctrl+Shift+D)                 Metadata)       |
-                                                  v
-                                             Dashboard (/ui)
-                                             System Tray + Webview
+                                    |             v
+                          Intent Detector     Dashboard (/ui)
+                            |                 System Tray + Webview
+                            v
+                        Action Engine
+                        (Task Store, Orchestrator,
+                         Scheduler, Confirmation Gate)
 ```
 
-**12 Rust crates** organized by DDD bounded contexts in a Cargo workspace:
+**13 Rust crates** organized by DDD bounded contexts in a Cargo workspace:
 
 | Crate | Purpose |
 |-------|---------|
-| `engram-core` | Shared types, config (25+ fields), error handling, domain events, PII safety gate (credit cards, SSNs, emails, phones) |
-| `engram-storage` | SQLite with WAL, FTS5 full-text search, tiered retention, migrations (v1-v4), vector metadata repository |
+| `engram-core` | Shared types, config (25+ fields), error handling, 45 domain events, PII safety gate (credit cards, SSNs, emails, phones) |
+| `engram-storage` | SQLite with WAL, FTS5 full-text search, tiered retention, migrations (v1-v5), vector metadata repository |
 | `engram-vector` | HNSW vector index (RuVector), ONNX embeddings, ingestion pipeline with dual-write metadata |
-| `engram-api` | axum REST API (27 endpoints), SSE streaming, auth middleware, rate limiting, dynamic CORS |
+| `engram-api` | axum REST API (37 endpoints), SSE streaming, auth middleware, rate limiting, dynamic CORS |
 | `engram-capture` | Screen capture via Win32 GDI BitBlt, multi-monitor with DPI awareness |
 | `engram-ocr` | OCR via Windows.Media.Ocr WinRT |
 | `engram-audio` | Audio capture via cpal/WASAPI, ring buffer |
 | `engram-whisper` | Whisper.cpp transcription (feature-gated) |
 | `engram-dictation` | State machine, global hotkey, text injection via SendInput |
-| `engram-ui` | Dashboard HTML (8 views), tray panel webview, system tray icon |
 | `engram-insight` | Extractive summarization, entity extraction, daily digest, topic clustering, Obsidian vault export |
+| `engram-action` | Intent detection (6 types, 80+ patterns), task store (7-state machine), 6 action handlers, orchestrator, scheduler, confirmation gate |
+| `engram-ui` | Dashboard HTML (8 views), tray panel webview, system tray icon |
 | `engram-app` | Composition root — CLI (clap), config loading, pipeline wiring |
 
 ---
@@ -66,7 +73,7 @@ cd engram
 # Build
 cargo build --release --workspace
 
-# Run tests (657 tests)
+# Run tests (987 tests across 13 crates)
 cargo test --workspace
 
 # Run the application
@@ -103,6 +110,8 @@ Config file at `~/.engram/config.toml` (auto-created on install). Priority: CLI 
 | `search.semantic_weight` | 0.7 | Weight for semantic vs FTS in hybrid search |
 | `storage.retention_days` | 90 | Data retention period |
 | `safety.redact_pii` | true | Enable PII redaction |
+| `actions.enabled` | true | Enable action engine (intent detection + task execution) |
+| `actions.auto_approve.passive` | true | Auto-approve passive (safe) actions |
 
 ---
 
@@ -116,58 +125,99 @@ Config file at `~/.engram/config.toml` (auto-created on install). Priority: CLI 
 | **Phase 1: Critical Integration** | Complete | 241 | Audio pipeline wiring, real embeddings, dictation transcription, FTS5 injection fix, DB path fix |
 | **Phase 2: Security Hardening** | Complete | 387 | Bearer token auth, rate limiting, error sanitization, config protection, graceful shutdown, Luhn validation, file permissions, system tray wiring |
 | **Phase 3: Feature Completeness** | Complete | 560 | CLI (clap), 25+ config fields, phone PII, 3 search modes, 21 API routes, multi-monitor + DPI, webview HWND, WiX installer, `cargo deny`, criterion benchmarks, 66 integration tests |
-| **Phase 4: Summarization & Insights** | Complete | 657 | engram-insight crate, extractive summarization, regex entity extraction (URLs, dates, money, projects, people), daily digest, topic clustering, Obsidian vault export, 6 new API routes (27 total), migration v4, SSE event bus activation, deferred infrastructure (CF-1 to CF-7) |
+| **Phase 4: Summarization & Insights** | Complete | 657 | engram-insight crate, extractive summarization, regex entity extraction (URLs, dates, money, projects, people), daily digest, topic clustering, Obsidian vault export, 6 new API routes (27 total), migration v4, SSE event bus activation |
+| **Phase 5: Local Action Engine** | Complete | 987 | engram-action crate, intent detection (6 types, 80+ regex patterns), task store (7-state machine), 6 action handlers, orchestrator with safety routing, scheduler, confirmation gate, rate limiter, 9 new API routes (37 total), migration v5, 10 new domain events (45 total) |
 
-### Upcoming Phases (PRDs Ready)
+### Upcoming Phases
 
 | Phase | Focus |
 |-------|-------|
-| **Phase 5: Local Action Engine** | Automated actions triggered by captured context, local command execution |
 | **Phase 6: Conversational Interface** | Natural language queries over your memory, chat-based interaction |
-| **Phase 7: General Tidy-Up #1** | General codebase tidy-up and cleanup |
-| **Phase 8: Workflow Automation & Integration** | Local tool integration, automated workflows triggered by context |
-| **Phase 9: Ambient Intelligence & Proactive Assistant** | Proactive suggestions, context-aware notifications, anticipatory assistance |
-| **Phase 10: General Tidy-Up #2** | General codebase tidy-up and cleanup |
-| **Phase 11: LAN Mode — Local Network Ingest** | One-way ingest from DevPods, VMs, and WSL instances over the local network |
+| **Phase 7: General Tidy-Up #1** | Real-world usage fixes, infrastructure hardening (TaskStore persistence, action_history wiring, unwrap/expect cleanup) |
+| **Phase 8: Workflow Integration** | Local tool integration (clipboard, Git, calendar, browser history, markdown watcher), trigger rules, template engine |
+| **Phase 9: Ambient Intelligence** | Context tracking, proactive suggestions, pattern detection, focus mode, learning loop |
+| **Phase 10: General Tidy-Up #2** | Post-Phase-9 usage fixes and polish |
+| **Phase 11: LAN Mode** | One-way ingest from DevPods, VMs, and WSL instances over the local network |
 
 Each phase has a full PRD in `docs/features/`.
 
 ---
 
-## API Endpoints (27 routes)
+## API Endpoints (37 routes)
 
 All protected endpoints require `Authorization: Bearer <token>`.
+
+### Core
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/health` | No | System health check |
 | GET | `/ui` | No | Dashboard HTML |
+| GET | `/stream` | Yes | SSE event stream (45 domain event types) |
+
+### Search
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
 | GET | `/search?q=&limit=&offset=` | Yes | Semantic + keyword search |
 | GET | `/search/semantic?q=&limit=` | Yes | Vector-only semantic search |
 | GET | `/search/hybrid?q=&limit=&weight=` | Yes | FTS5 + vector hybrid |
 | GET | `/search/raw?q=&limit=` | Yes | FTS5-only with BM25 scores |
+
+### Capture & Audio
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
 | GET | `/recent?content_type=&limit=` | Yes | Recent captures |
 | GET | `/apps` | Yes | App capture counts |
 | GET | `/apps/{name}/activity` | Yes | Hourly activity for an app |
 | GET | `/audio/status` | Yes | Audio capture status |
 | GET | `/audio/device` | Yes | Current audio device |
+| POST | `/ingest` | Yes | Ingest text content |
+
+### Dictation
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
 | GET | `/dictation/status` | Yes | Dictation engine state |
 | GET | `/dictation/history` | Yes | Recent dictation entries |
 | POST | `/dictation/start` | Yes | Start dictation |
 | POST | `/dictation/stop` | Yes | Stop and transcribe |
+
+### Storage & Config
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
 | GET | `/storage/stats` | Yes | DB size and counts |
 | POST | `/storage/purge` | Yes | Purge old captures |
 | POST | `/storage/purge/dry-run` | Yes | Preview purge |
 | GET | `/config` | Yes | Current config |
 | PUT | `/config` | Yes | Update config |
-| POST | `/ingest` | Yes | Ingest text content |
+
+### Insights (Phase 4)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
 | GET | `/insights/daily` | Yes | Latest daily digest |
 | GET | `/insights/daily/{date}` | Yes | Digest for specific date |
 | GET | `/insights/topics` | Yes | Topic clusters |
 | GET | `/entities` | Yes | Extracted entities |
 | GET | `/summaries` | Yes | Generated summaries |
 | POST | `/insights/export` | Yes | Trigger Obsidian vault export |
-| GET | `/stream` | Yes | SSE event stream |
+
+### Action Engine (Phase 5)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/tasks` | Yes | List tasks (filterable by status) |
+| POST | `/tasks` | Yes | Create a task (returns 403 if actions disabled) |
+| GET | `/tasks/{id}` | Yes | Get task by ID |
+| PUT | `/tasks/{id}` | Yes | Update task |
+| DELETE | `/tasks/{id}` | Yes | Delete task |
+| GET | `/actions/history` | Yes | Action execution history |
+| GET | `/intents` | Yes | Detected intents |
+| POST | `/actions/{task_id}/approve` | Yes | Approve a queued action |
+| POST | `/actions/{task_id}/dismiss` | Yes | Dismiss a queued action |
 
 ---
 
@@ -176,16 +226,17 @@ All protected endpoints require `Authorization: Bearer <token>`.
 ```
 engram/
   crates/
-    engram-core/          # Shared kernel: types, config, errors, events, safety
-    engram-storage/       # SQLite, FTS5, tiered retention, repositories
+    engram-core/          # Shared kernel: types, config, errors, 45 domain events, safety
+    engram-storage/       # SQLite, FTS5, tiered retention, migrations (v1-v5), repositories
     engram-vector/        # HNSW index, ONNX embeddings, ingestion pipeline
-    engram-api/           # axum REST API, SSE, handlers
+    engram-api/           # axum REST API, SSE, auth, rate limiting, 37 handlers
     engram-capture/       # Win32 GDI screen capture, multi-monitor, DPI
     engram-ocr/           # WinRT OCR
     engram-audio/         # cpal/WASAPI audio, Silero VAD
     engram-whisper/       # Whisper.cpp transcription
     engram-dictation/     # State machine, hotkey, text injection
     engram-insight/       # Summarization, entity extraction, digest, clustering, vault export
+    engram-action/        # Intent detection, task store, action handlers, orchestrator, scheduler
     engram-ui/            # Dashboard HTML, tray panel webview, system tray
     engram-app/           # main.rs — CLI, config, composition root
   wix/                    # WiX installer configuration
@@ -201,6 +252,7 @@ Full documentation lives in `docs/`:
 - **[DDD Domain Model](docs/base/ddd/)** — Bounded contexts, aggregates, entities, events
 - **[API Contracts](docs/features/initial_build/specification/api-contracts.md)** — REST API specification
 - **Phase PRDs** — `docs/features/phase*/` — Full specifications for each phase
+- **Phase Reviews** — `docs/features/phase*/review/` — Requirements compliance, stubs audit, security audit
 
 ---
 

@@ -5,12 +5,15 @@
 
 pub mod context;
 pub mod error;
+pub mod orchestrator;
 pub mod parser;
 pub mod response;
 pub mod types;
+pub mod voice;
 
 pub use context::{ConversationManager, FollowUpResolver};
 pub use error::ChatError;
+pub use orchestrator::ChatOrchestrator;
 pub use parser::QueryParser;
 pub use response::{ResponseGenerator, SearchResult};
 pub use types::{
@@ -18,3 +21,4 @@ pub use types::{
     ChatResponse, ChatResponseBody, ChatSessionSummary, ChatSessionsResponse,
     ConversationSession, QueryIntent, SessionContext, SourceRef, StructuredQuery, TimeRange, Turn,
 };
+pub use voice::VoiceInterface;

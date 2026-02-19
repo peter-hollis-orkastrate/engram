@@ -56,6 +56,8 @@ pub struct AppState {
     pub orchestrator: Arc<engram_action::Orchestrator>,
     /// Action engine configuration.
     pub action_config: engram_action::ActionConfig,
+    /// Chat orchestrator for the conversational interface.
+    pub chat: Option<Arc<engram_chat::ChatOrchestrator>>,
 }
 
 impl AppState {
@@ -128,6 +130,7 @@ impl AppState {
             confirmation_gate,
             orchestrator,
             action_config,
+            chat: None,
         }
     }
 
@@ -161,6 +164,12 @@ impl AppState {
     ) -> Self {
         self.audio_active = audio_active;
         self.dictation_engine = dictation_engine;
+        self
+    }
+
+    /// Set the chat orchestrator.
+    pub fn with_chat(mut self, chat: Arc<engram_chat::ChatOrchestrator>) -> Self {
+        self.chat = Some(chat);
         self
     }
 

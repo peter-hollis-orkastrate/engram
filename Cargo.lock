@@ -1110,6 +1110,7 @@ dependencies = [
  "axum",
  "chrono",
  "engram-action",
+ "engram-chat",
  "engram-core",
  "engram-dictation",
  "engram-insight",

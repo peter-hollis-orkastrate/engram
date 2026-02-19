@@ -141,7 +141,8 @@ Config file at `~/.engram/config.toml` (auto-created on install). Priority: CLI 
 | **Phase 8: Workflow Integration** | Local tool integration (clipboard, Git, calendar, browser history, markdown watcher), trigger rules, template engine |
 | **Phase 9: Ambient Intelligence** | Context tracking, proactive suggestions, pattern detection, focus mode, learning loop |
 | **Phase 10: General Tidy-Up** | Accumulated fixes: system tray wiring, TaskStore SQLite backing, action_history persistence, unwrap/expect cleanup, plus Phase 8-9 findings |
-| **Phase 11: LAN Mode** | One-way ingest from DevPods, VMs, and WSL instances over the local network |
+| **Phase 11: Virtual Microphone** | Virtual audio device driver ("Engram Mic") for app-gated audio capture — privacy-first, no hot mic |
+| **Phase 12: LAN Mode** | One-way ingest from DevPods, VMs, and WSL instances over the local network |
 
 Each phase has a full PRD in `docs/features/`.
 

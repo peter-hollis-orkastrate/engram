@@ -90,9 +90,11 @@ struct TimePatterns {
     this_week: Regex,
     last_month: Regex,
     on_weekday: Regex,
+    between_months: Regex,
 }
 
-static TIME_PATTERNS: LazyLock<TimePatterns> = LazyLock::new(|| TimePatterns {
+static TIME_PATTERNS: LazyLock<TimePatterns> = LazyLock::new(|| {
+    TimePatterns {
     yesterday: Regex::new(r"(?i)\byesterday\b").unwrap(),
     today: Regex::new(r"(?i)\btoday\b").unwrap(),
     this_morning: Regex::new(r"(?i)\bthis\s+morning\b").unwrap(),
@@ -104,6 +106,11 @@ static TIME_PATTERNS: LazyLock<TimePatterns> = LazyLock::new(|| TimePatterns {
         r"(?i)\bon\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
     )
     .unwrap(),
+    between_months: Regex::new(
+        r"(?i)\bbetween\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+and\s+(january|february|march|april|may|june|july|august|september|october|november|december)\b",
+    )
+    .unwrap(),
+}
 });
 
 // Person extraction patterns
@@ -482,6 +489,39 @@ impl QueryParser {
             });
         }
 
+        // FIX-5(a): "between [month] and [month]"
+        if let Some(caps) = tp.between_months.captures(raw_query) {
+            let start_month_str = caps.get(1)?.as_str().to_lowercase();
+            let end_month_str = caps.get(2)?.as_str().to_lowercase();
+            if let (Some(sm), Some(em)) = (
+                month_name_to_number(&start_month_str),
+                month_name_to_number(&end_month_str),
+            ) {
+                let year = now.year();
+                let start_date = chrono::NaiveDate::from_ymd_opt(year, sm, 1)?;
+                // End of the last day of end_month
+                let end_next = if em == 12 {
+                    chrono::NaiveDate::from_ymd_opt(year + 1, 1, 1)?
+                } else {
+                    chrono::NaiveDate::from_ymd_opt(year, em + 1, 1)?
+                };
+                let end_date = end_next - Duration::days(1);
+
+                let start = start_date
+                    .and_time(NaiveTime::from_hms_opt(0, 0, 0)?)
+                    .and_local_timezone(Local)
+                    .single()?;
+                let end = end_date
+                    .and_time(NaiveTime::from_hms_opt(23, 59, 59)?)
+                    .and_local_timezone(Local)
+                    .single()?;
+                return Some(TimeRange {
+                    start: start.timestamp(),
+                    end: end.timestamp(),
+                });
+            }
+        }
+
         None
     }
 
@@ -612,9 +652,22 @@ impl QueryParser {
     // -----------------------------------------------------------------
 
     /// Parse a raw query into a fully populated [`StructuredQuery`].
+    /// FIX-5(b): When no time expression matches, applies `default_search_days` as fallback.
     pub fn parse(&self, raw_query: &str, known_entities: &[String]) -> StructuredQuery {
         let intent = self.classify_intent(raw_query);
-        let time_range = self.extract_time_range(raw_query);
+        let time_range = self.extract_time_range(raw_query).or_else(|| {
+            // FIX-5(b): Apply default_search_days as fallback when no explicit time
+            if self.default_search_days > 0 {
+                let now = Local::now();
+                let start = now - Duration::days(i64::from(self.default_search_days));
+                Some(TimeRange {
+                    start: start.timestamp(),
+                    end: now.timestamp(),
+                })
+            } else {
+                None
+            }
+        });
         let people = self.extract_people(raw_query, known_entities);
         let app_filter = self.extract_app(raw_query);
         let topics = self.extract_topics(raw_query, &people, &app_filter);
@@ -654,6 +707,25 @@ fn is_known_app_lower(lower: &str) -> bool {
     KNOWN_APPS.iter().any(|a| a.to_lowercase() == lower)
 }
 
+/// Map month name (lowercase) to 1-based month number.
+fn month_name_to_number(name: &str) -> Option<u32> {
+    match name {
+        "january" => Some(1),
+        "february" => Some(2),
+        "march" => Some(3),
+        "april" => Some(4),
+        "may" => Some(5),
+        "june" => Some(6),
+        "july" => Some(7),
+        "august" => Some(8),
+        "september" => Some(9),
+        "october" => Some(10),
+        "november" => Some(11),
+        "december" => Some(12),
+        _ => None,
+    }
+}
+
 /// Normalize matched app text to canonical casing.
 fn normalize_app_name(matched: &str) -> String {
     let lower = matched.to_lowercase();
@@ -672,6 +744,7 @@ fn normalize_app_name(matched: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{Datelike, TimeZone};
 
     fn parser() -> QueryParser {
         QueryParser::new(7)
@@ -1622,7 +1695,8 @@ mod tests {
         assert_eq!(q.intent, QueryIntent::Search);
         assert!(q.people.is_empty());
         assert!(q.app_filter.is_none());
-        assert!(q.time_range.is_none());
+        // FIX-5(b): default_search_days (7) is applied as fallback
+        assert!(q.time_range.is_some());
     }
 
     #[test]
@@ -1631,7 +1705,8 @@ mod tests {
         assert_eq!(q.intent, QueryIntent::Search);
         assert!(q.topics.is_empty());
         assert!(q.people.is_empty());
-        assert!(q.time_range.is_none());
+        // FIX-5(b): default_search_days (7) is applied as fallback
+        assert!(q.time_range.is_some());
         assert!(q.raw_query.is_empty());
     }
 
@@ -1641,5 +1716,97 @@ mod tests {
     fn test_parser_custom_default_search_days() {
         let p = QueryParser::new(30);
         assert_eq!(p.default_search_days, 30);
+    }
+
+    // ---- FIX-5(a): "between [month] and [month]" ----
+
+    #[test]
+    fn test_time_between_january_and_march() {
+        let tr = parser()
+            .extract_time_range("between January and March")
+            .unwrap();
+        assert!(tr.start < tr.end);
+        // Start should be Jan 1, end should be Mar 31
+        let start_dt = Local.timestamp_opt(tr.start, 0).unwrap();
+        let end_dt = Local.timestamp_opt(tr.end, 0).unwrap();
+        assert_eq!(start_dt.month(), 1);
+        assert_eq!(start_dt.day(), 1);
+        assert_eq!(end_dt.month(), 3);
+        assert_eq!(end_dt.day(), 31);
+    }
+
+    #[test]
+    fn test_time_between_june_and_december() {
+        let tr = parser()
+            .extract_time_range("between june and december")
+            .unwrap();
+        assert!(tr.start < tr.end);
+        let end_dt = Local.timestamp_opt(tr.end, 0).unwrap();
+        assert_eq!(end_dt.month(), 12);
+        assert_eq!(end_dt.day(), 31);
+    }
+
+    #[test]
+    fn test_time_between_case_insensitive() {
+        let tr = parser()
+            .extract_time_range("between APRIL and AUGUST")
+            .unwrap();
+        assert!(tr.start < tr.end);
+    }
+
+    // ---- FIX-5(b): default_search_days fallback ----
+
+    #[test]
+    fn test_default_search_days_applied_when_no_time_expr() {
+        let p = QueryParser::new(7);
+        let q = p.parse("random stuff", &[]);
+        assert!(q.time_range.is_some());
+        let tr = q.time_range.unwrap();
+        let now = Local::now().timestamp();
+        let seven_days_ago = now - (7 * 86400);
+        // Start should be approximately 7 days ago
+        assert!((tr.start - seven_days_ago).abs() < 5);
+        assert!((tr.end - now).abs() < 5);
+    }
+
+    #[test]
+    fn test_default_search_days_zero_no_fallback() {
+        let p = QueryParser::new(0);
+        let q = p.parse("random stuff", &[]);
+        assert!(q.time_range.is_none());
+    }
+
+    #[test]
+    fn test_explicit_time_overrides_default() {
+        let p = QueryParser::new(7);
+        let q = p.parse("what happened yesterday", &[]);
+        let tr = q.time_range.unwrap();
+        // Should be yesterday's range, not 7-day default
+        let now = Local::now();
+        let yesterday_start = (now.date_naive() - Duration::days(1))
+            .and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap())
+            .and_local_timezone(Local)
+            .unwrap()
+            .timestamp();
+        assert_eq!(tr.start, yesterday_start);
+    }
+
+    // ---- month_name_to_number helper ----
+
+    #[test]
+    fn test_month_name_to_number_all() {
+        assert_eq!(super::month_name_to_number("january"), Some(1));
+        assert_eq!(super::month_name_to_number("february"), Some(2));
+        assert_eq!(super::month_name_to_number("march"), Some(3));
+        assert_eq!(super::month_name_to_number("april"), Some(4));
+        assert_eq!(super::month_name_to_number("may"), Some(5));
+        assert_eq!(super::month_name_to_number("june"), Some(6));
+        assert_eq!(super::month_name_to_number("july"), Some(7));
+        assert_eq!(super::month_name_to_number("august"), Some(8));
+        assert_eq!(super::month_name_to_number("september"), Some(9));
+        assert_eq!(super::month_name_to_number("october"), Some(10));
+        assert_eq!(super::month_name_to_number("november"), Some(11));
+        assert_eq!(super::month_name_to_number("december"), Some(12));
+        assert_eq!(super::month_name_to_number("invalid"), None);
     }
 }

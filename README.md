@@ -15,7 +15,8 @@ Engram runs quietly in your system tray, capturing what's on your screen and wha
 - **Privacy First** — PII redaction (credit cards, SSNs, emails, phone numbers) before storage, localhost-only API with Bearer token auth, no network connections
 - **Summarization & Insights** — Extractive summarization, entity extraction (URLs, dates, money, projects, people), daily digests, topic clustering, Obsidian vault export
 - **Action Engine** — Intent detection from captured text (80+ regex patterns), task lifecycle management (7-state machine), safety-gated action execution with confirmation flow
-- **Dashboard** — 8-tab web dashboard at `/ui` with real-time search, timeline, app activity, and storage management
+- **Conversational Interface** — Natural language chat over your memory: NLP query parsing (40+ regex patterns), follow-up resolution, pronoun handling, session management with SQLite persistence, real FTS5 search routing, action dispatch, analytics queries, domain event emission
+- **Dashboard** — 8-tab web dashboard at `/ui` with real-time search, timeline, app activity, chat panel, and storage management
 
 ## Architecture
 
@@ -25,25 +26,27 @@ Screen Capture (1 FPS) ----\
 Audio Capture (WASAPI) -------> EngramPipeline --> SQLite + HNSW Vector Store
   VAD -> Whisper            /   (Safety Gate       |
                            /     Dedup              v
-Dictation Engine ---------/      Embed         REST API (:3030, 37 endpoints)
+Dictation Engine ---------/      Embed         REST API (:3030, 41 endpoints)
   (Ctrl+Shift+D)                 Metadata)       |
                                     |             v
                           Intent Detector     Dashboard (/ui)
                             |                 System Tray + Webview
-                            v
-                        Action Engine
-                        (Task Store, Orchestrator,
-                         Scheduler, Confirmation Gate)
+                            v                     |
+                        Action Engine         Chat Interface
+                        (Task Store,          (NLP Parser, Context,
+                         Orchestrator,         FTS Search, Action
+                         Scheduler,            Dispatch, Analytics,
+                         Confirmation Gate)    Session Persistence)
 ```
 
-**13 Rust crates** organized by DDD bounded contexts in a Cargo workspace:
+**14 Rust crates** organized by DDD bounded contexts in a Cargo workspace:
 
 | Crate | Purpose |
 |-------|---------|
 | `engram-core` | Shared types, config (25+ fields), error handling, 45 domain events, PII safety gate (credit cards, SSNs, emails, phones) |
-| `engram-storage` | SQLite with WAL, FTS5 full-text search, tiered retention, migrations (v1-v5), vector metadata repository |
+| `engram-storage` | SQLite with WAL, FTS5 full-text search, tiered retention, migrations (v1-v6), vector metadata repository |
 | `engram-vector` | HNSW vector index (RuVector), ONNX embeddings, ingestion pipeline with dual-write metadata |
-| `engram-api` | axum REST API (37 endpoints), SSE streaming, auth middleware, rate limiting, dynamic CORS |
+| `engram-api` | axum REST API (41 endpoints), SSE streaming, auth middleware, rate limiting, dynamic CORS |
 | `engram-capture` | Screen capture via Win32 GDI BitBlt, multi-monitor with DPI awareness |
 | `engram-ocr` | OCR via Windows.Media.Ocr WinRT |
 | `engram-audio` | Audio capture via cpal/WASAPI, ring buffer |
@@ -51,7 +54,8 @@ Dictation Engine ---------/      Embed         REST API (:3030, 37 endpoints)
 | `engram-dictation` | State machine, global hotkey, text injection via SendInput |
 | `engram-insight` | Extractive summarization, entity extraction, daily digest, topic clustering, Obsidian vault export |
 | `engram-action` | Intent detection (6 types, 80+ patterns), task store (7-state machine), 6 action handlers, orchestrator, scheduler, confirmation gate |
-| `engram-ui` | Dashboard HTML (8 views), tray panel webview, system tray icon |
+| `engram-chat` | NLP query parser (40+ patterns), conversation context manager, follow-up resolution, response generator, chat orchestrator with real FTS search, action dispatch, analytics, SQLite session persistence, domain events |
+| `engram-ui` | Dashboard HTML (8 views + chat panel), tray panel webview, system tray icon |
 | `engram-app` | Composition root — CLI (clap), config loading, pipeline wiring |
 
 ---
@@ -73,7 +77,7 @@ cd engram
 # Build
 cargo build --release --workspace
 
-# Run tests (987 tests across 13 crates)
+# Run tests (1325 tests across 14 crates)
 cargo test --workspace
 
 # Run the application
@@ -127,23 +131,23 @@ Config file at `~/.engram/config.toml` (auto-created on install). Priority: CLI 
 | **Phase 3: Feature Completeness** | Complete | 560 | CLI (clap), 25+ config fields, phone PII, 3 search modes, 21 API routes, multi-monitor + DPI, webview HWND, WiX installer, `cargo deny`, criterion benchmarks, 66 integration tests |
 | **Phase 4: Summarization & Insights** | Complete | 657 | engram-insight crate, extractive summarization, regex entity extraction (URLs, dates, money, projects, people), daily digest, topic clustering, Obsidian vault export, 6 new API routes (27 total), migration v4, SSE event bus activation |
 | **Phase 5: Local Action Engine** | Complete | 987 | engram-action crate, intent detection (6 types, 80+ regex patterns), task store (7-state machine), 6 action handlers, orchestrator with safety routing, scheduler, confirmation gate, rate limiter, 9 new API routes (37 total), migration v5, 10 new domain events (45 total) |
+| **Phase 6: Conversational Interface** | Complete | 1325 | engram-chat crate, NLP query parser (40+ regex patterns, time/person/app/topic extraction), conversation context manager with follow-up resolution and pronoun handling, response generator (extractive + analytics), chat orchestrator wired to real FTS5 search, action dispatch via IntentDetector + TaskStore, analytics via QueryService, SQLite session/message persistence (write-through), 4 domain events emitted, known entity loading, 5 new API routes (41 total), migration v6, dashboard chat panel with XSS-safe rendering |
 
 ### Upcoming Phases
 
 | Phase | Focus |
 |-------|-------|
-| **Phase 6: Conversational Interface** | Natural language queries over your memory, chat-based interaction |
-| **Phase 7: General Tidy-Up #1** | Real-world usage fixes, infrastructure hardening (TaskStore persistence, action_history wiring, unwrap/expect cleanup) |
+| **Phase 7: Chat Response Quality** | Smart query routing to structured data stores (tasks, entities, summaries), future time parsing, FTS result truncation, relevance scoring fixes |
 | **Phase 8: Workflow Integration** | Local tool integration (clipboard, Git, calendar, browser history, markdown watcher), trigger rules, template engine |
 | **Phase 9: Ambient Intelligence** | Context tracking, proactive suggestions, pattern detection, focus mode, learning loop |
-| **Phase 10: General Tidy-Up #2** | Post-Phase-9 usage fixes and polish |
+| **Phase 10: General Tidy-Up** | Accumulated fixes: system tray wiring, TaskStore SQLite backing, action_history persistence, unwrap/expect cleanup, plus Phase 8-9 findings |
 | **Phase 11: LAN Mode** | One-way ingest from DevPods, VMs, and WSL instances over the local network |
 
 Each phase has a full PRD in `docs/features/`.
 
 ---
 
-## API Endpoints (37 routes)
+## API Endpoints (41 routes)
 
 All protected endpoints require `Authorization: Bearer <token>`.
 
@@ -153,7 +157,7 @@ All protected endpoints require `Authorization: Bearer <token>`.
 |--------|------|------|-------------|
 | GET | `/health` | No | System health check |
 | GET | `/ui` | No | Dashboard HTML |
-| GET | `/stream` | Yes | SSE event stream (45 domain event types) |
+| GET | `/stream` | Yes | SSE event stream (49 domain event types) |
 
 ### Search
 
@@ -219,6 +223,15 @@ All protected endpoints require `Authorization: Bearer <token>`.
 | POST | `/actions/{task_id}/approve` | Yes | Approve a queued action |
 | POST | `/actions/{task_id}/dismiss` | Yes | Dismiss a queued action |
 
+### Chat (Phase 6)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/chat` | Yes | Send a chat message (returns AI response) |
+| GET | `/chat/history?session_id=` | Yes | Message history for a session |
+| GET | `/chat/sessions` | Yes | List chat sessions |
+| DELETE | `/chat/sessions/{id}` | Yes | Delete a chat session |
+
 ---
 
 ## Project Structure
@@ -226,10 +239,10 @@ All protected endpoints require `Authorization: Bearer <token>`.
 ```
 engram/
   crates/
-    engram-core/          # Shared kernel: types, config, errors, 45 domain events, safety
-    engram-storage/       # SQLite, FTS5, tiered retention, migrations (v1-v5), repositories
+    engram-core/          # Shared kernel: types, config, errors, 49 domain events, safety
+    engram-storage/       # SQLite, FTS5, tiered retention, migrations (v1-v6), repositories
     engram-vector/        # HNSW index, ONNX embeddings, ingestion pipeline
-    engram-api/           # axum REST API, SSE, auth, rate limiting, 37 handlers
+    engram-api/           # axum REST API, SSE, auth, rate limiting, 41 handlers
     engram-capture/       # Win32 GDI screen capture, multi-monitor, DPI
     engram-ocr/           # WinRT OCR
     engram-audio/         # cpal/WASAPI audio, Silero VAD
@@ -237,7 +250,8 @@ engram/
     engram-dictation/     # State machine, hotkey, text injection
     engram-insight/       # Summarization, entity extraction, digest, clustering, vault export
     engram-action/        # Intent detection, task store, action handlers, orchestrator, scheduler
-    engram-ui/            # Dashboard HTML, tray panel webview, system tray
+    engram-chat/          # NLP query parser, context manager, chat orchestrator, session persistence
+    engram-ui/            # Dashboard HTML (8 views + chat panel), tray panel, system tray
     engram-app/           # main.rs — CLI, config, composition root
   wix/                    # WiX installer configuration
   deny.toml               # Supply chain security policy

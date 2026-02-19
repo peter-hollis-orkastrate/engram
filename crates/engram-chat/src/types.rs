@@ -293,14 +293,24 @@ pub struct ChatLlmConfig {
     pub temperature: f32,
 }
 
+impl ChatLlmConfig {
+    /// Clamp temperature to [0.0, 2.0] and max_tokens to [1, 4096].
+    pub fn clamp(&mut self) {
+        self.temperature = self.temperature.clamp(0.0, 2.0);
+        self.max_tokens = self.max_tokens.clamp(1, 4096);
+    }
+}
+
 impl Default for ChatLlmConfig {
     fn default() -> Self {
-        Self {
+        let mut config = Self {
             enabled: false,
             model_path: String::new(),
             max_tokens: 512,
             temperature: 0.3,
-        }
+        };
+        config.clamp();
+        config
     }
 }
 
@@ -689,6 +699,48 @@ mod tests {
         assert!(config.model_path.is_empty());
         assert_eq!(config.max_tokens, 512);
         assert!((config.temperature - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_chat_llm_config_clamp_temperature_high() {
+        let mut config = ChatLlmConfig::default();
+        config.temperature = 5.0;
+        config.clamp();
+        assert!((config.temperature - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_chat_llm_config_clamp_temperature_negative() {
+        let mut config = ChatLlmConfig::default();
+        config.temperature = -1.0;
+        config.clamp();
+        assert!((config.temperature - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_chat_llm_config_clamp_max_tokens_high() {
+        let mut config = ChatLlmConfig::default();
+        config.max_tokens = 10000;
+        config.clamp();
+        assert_eq!(config.max_tokens, 4096);
+    }
+
+    #[test]
+    fn test_chat_llm_config_clamp_max_tokens_zero() {
+        let mut config = ChatLlmConfig::default();
+        config.max_tokens = 0;
+        config.clamp();
+        assert_eq!(config.max_tokens, 1);
+    }
+
+    #[test]
+    fn test_chat_llm_config_clamp_valid_values_unchanged() {
+        let mut config = ChatLlmConfig::default();
+        config.temperature = 1.0;
+        config.max_tokens = 2048;
+        config.clamp();
+        assert!((config.temperature - 1.0).abs() < f32::EPSILON);
+        assert_eq!(config.max_tokens, 2048);
     }
 
     #[test]

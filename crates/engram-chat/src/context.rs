@@ -148,6 +148,14 @@ impl FollowUpResolver {
             }
         }
 
+        // FIX-4: "when was that?" -- extract timestamps from previous results
+        if raw_lower.contains("when was that")
+            || raw_lower.contains("when did that happen")
+            || raw_lower.contains("when was it")
+        {
+            query.topics.push("__when__".to_string());
+        }
+
         // Pronoun resolution
         self.resolve_pronouns(query, context);
     }
@@ -684,5 +692,43 @@ mod tests {
 
         // active_topic should remain "deployment" because q2 had no topics
         assert_eq!(session.context.active_topic, Some("deployment".to_string()));
+    }
+
+    // ---- FIX-4: "when was that?" adds __when__ marker ----
+
+    #[test]
+    fn test_followup_when_was_that_marker() {
+        let resolver = FollowUpResolver;
+        let ctx = make_context_with_person_and_topic();
+        let mut q = make_query("when was that?", QueryIntent::Clarification);
+        resolver.resolve(&mut q, &ctx);
+        assert!(q.topics.contains(&"__when__".to_string()));
+    }
+
+    #[test]
+    fn test_followup_when_did_that_happen_marker() {
+        let resolver = FollowUpResolver;
+        let ctx = make_context_with_person_and_topic();
+        let mut q = make_query("when did that happen?", QueryIntent::Clarification);
+        resolver.resolve(&mut q, &ctx);
+        assert!(q.topics.contains(&"__when__".to_string()));
+    }
+
+    #[test]
+    fn test_followup_when_was_it_marker() {
+        let resolver = FollowUpResolver;
+        let ctx = make_context_with_person_and_topic();
+        let mut q = make_query("when was it?", QueryIntent::Clarification);
+        resolver.resolve(&mut q, &ctx);
+        assert!(q.topics.contains(&"__when__".to_string()));
+    }
+
+    #[test]
+    fn test_followup_when_was_that_no_context() {
+        let resolver = FollowUpResolver;
+        let ctx = SessionContext::default();
+        let mut q = make_query("when was that?", QueryIntent::Clarification);
+        resolver.resolve(&mut q, &ctx);
+        assert!(q.topics.contains(&"__when__".to_string()));
     }
 }

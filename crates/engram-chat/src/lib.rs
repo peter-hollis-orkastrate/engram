@@ -13,7 +13,7 @@ pub mod voice;
 
 pub use context::{ConversationManager, FollowUpResolver};
 pub use error::ChatError;
-pub use orchestrator::ChatOrchestrator;
+pub use orchestrator::{ChatBackends, ChatOrchestrator};
 pub use parser::QueryParser;
 pub use response::{ResponseGenerator, SearchResult};
 pub use types::{

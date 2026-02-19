@@ -1194,8 +1194,11 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "engram-action",
  "engram-core",
+ "engram-storage",
  "regex",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

@@ -31,7 +31,7 @@ impl WhisperService {
     /// or fails to load.
     #[cfg(feature = "whisper")]
     pub fn new(config: WhisperConfig) -> Result<Self, EngramError> {
-        use whisper_rs::WhisperContextParameters;
+        use whisper_rs::{WhisperContext, WhisperContextParameters};
 
         let model_path = &config.model_path;
         if !Path::new(model_path).exists() {
@@ -268,14 +268,18 @@ mod tests {
             model_path: "/my/model.bin".to_string(),
             language: "auto".to_string(),
         };
-        let service = WhisperService::new(config).unwrap_or_else(|_| {
-            // Stub for when whisper feature is enabled but file doesn't exist.
-            // This test only validates config accessor.
-            panic!("Test requires model file when whisper feature is enabled");
-        });
+
+        #[cfg(feature = "whisper")]
+        {
+            // With whisper feature, new() fails without a real model file.
+            // Just verify the error is returned cleanly.
+            let result = WhisperService::new(config);
+            assert!(result.is_err());
+        }
 
         #[cfg(not(feature = "whisper"))]
         {
+            let service = WhisperService::new(config).unwrap();
             assert_eq!(service.config().model_path, "/my/model.bin");
             assert_eq!(service.config().language, "auto");
         }

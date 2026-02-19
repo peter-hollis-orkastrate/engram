@@ -2025,7 +2025,7 @@ pub async fn chat_history_handler(
         .parse::<Uuid>()
         .map_err(|_| ApiError::BadRequest("Invalid session_id".to_string()))?;
 
-    let limit = params.limit.unwrap_or(50);
+    let limit = params.limit.unwrap_or(50).min(200);
 
     let messages = chat.get_history(session_id).map_err(|e| match e {
         engram_chat::ChatError::SessionNotFound(_) => {

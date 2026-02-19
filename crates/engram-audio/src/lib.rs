@@ -90,6 +90,12 @@ pub trait VoiceActivityDetector: Send + Sync {
     /// # Arguments
     /// * `audio_frame` - PCM audio samples as f32 values in [-1.0, 1.0].
     fn detect(&self, audio_frame: &[f32]) -> VadResult;
+
+    /// Reset the internal state (e.g., LSTM hidden/cell state).
+    ///
+    /// Call this after a speech→silence transition to prevent state drift
+    /// in long-running streams. Default implementation is a no-op.
+    fn reset(&self) {}
 }
 
 // =============================================================================

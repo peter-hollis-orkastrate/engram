@@ -222,11 +222,65 @@ impl AudioCaptureService for WindowsAudioService {
         let buffer = self.buffer.clone();
         let active_flag = Arc::clone(&self.active);
 
+        // Capture actual device format for resampling in the callback.
+        let device_rate = stream_config.sample_rate.0;
+        let device_channels = stream_config.channels;
+        let target_rate = self.config.sample_rate;
+
+        let needs_conversion = device_rate != target_rate || device_channels != 1;
+        if needs_conversion {
+            info!(
+                device_rate,
+                device_channels,
+                target_rate,
+                "Audio callback will downmix/resample: {}ch {}Hz → 1ch {}Hz",
+                device_channels,
+                device_rate,
+                target_rate
+            );
+        }
+
         let stream = device
             .build_input_stream(
                 &stream_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    buffer.push(data);
+                    if !needs_conversion {
+                        buffer.push(data);
+                        return;
+                    }
+
+                    // Step 1: Downmix to mono (average all channels).
+                    let mono: Vec<f32> = if device_channels > 1 {
+                        let ch = device_channels as usize;
+                        data.chunks_exact(ch)
+                            .map(|frame| {
+                                let sum: f32 = frame.iter().sum();
+                                sum / ch as f32
+                            })
+                            .collect()
+                    } else {
+                        data.to_vec()
+                    };
+
+                    // Step 2: Resample to target rate via linear interpolation.
+                    let resampled = if device_rate != target_rate {
+                        let ratio = device_rate as f64 / target_rate as f64;
+                        let out_len = (mono.len() as f64 / ratio).ceil() as usize;
+                        let mut out = Vec::with_capacity(out_len);
+                        for i in 0..out_len {
+                            let src = i as f64 * ratio;
+                            let idx0 = src.floor() as usize;
+                            let idx1 = (idx0 + 1).min(mono.len().saturating_sub(1));
+                            let frac = (src - idx0 as f64) as f32;
+                            let sample = mono[idx0] * (1.0 - frac) + mono[idx1] * frac;
+                            out.push(sample);
+                        }
+                        out
+                    } else {
+                        mono
+                    };
+
+                    buffer.push(&resampled);
                 },
                 move |err| {
                     tracing::error!("Audio stream error: {}", err);
@@ -248,8 +302,10 @@ impl AudioCaptureService for WindowsAudioService {
         self.active.store(true, Ordering::Relaxed);
         info!(
             device = %device_name,
-            sample_rate = self.config.sample_rate,
-            channels = self.config.channels,
+            device_rate,
+            device_channels,
+            target_rate,
+            target_channels = 1,
             "Audio capture started"
         );
 
@@ -369,5 +425,46 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("only available on Windows"));
+    }
+
+    #[test]
+    fn test_stereo_to_mono_downmix() {
+        // Simulate stereo interleaved: [L0, R0, L1, R1, ...]
+        let stereo = vec![0.4f32, 0.6, 0.2, 0.8, 1.0, 0.0];
+        let ch = 2usize;
+        let mono: Vec<f32> = stereo
+            .chunks_exact(ch)
+            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
+            .collect();
+        assert_eq!(mono.len(), 3);
+        assert!((mono[0] - 0.5).abs() < 1e-6);
+        assert!((mono[1] - 0.5).abs() < 1e-6);
+        assert!((mono[2] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_linear_resample_3to1() {
+        // 48kHz → 16kHz is a 3:1 ratio. Test with simple known input.
+        let input: Vec<f32> = (0..30).map(|i| i as f32).collect();
+        let from_rate = 48000u32;
+        let to_rate = 16000u32;
+        let ratio = from_rate as f64 / to_rate as f64; // 3.0
+        let out_len = (input.len() as f64 / ratio).ceil() as usize; // 10
+        assert_eq!(out_len, 10);
+
+        let mut out = Vec::with_capacity(out_len);
+        for i in 0..out_len {
+            let src = i as f64 * ratio;
+            let idx0 = src.floor() as usize;
+            let idx1 = (idx0 + 1).min(input.len() - 1);
+            let frac = (src - idx0 as f64) as f32;
+            out.push(input[idx0] * (1.0 - frac) + input[idx1] * frac);
+        }
+
+        // At 3:1 ratio, output[0]=0, output[1]=3, output[2]=6, ...
+        assert!((out[0] - 0.0).abs() < 1e-6);
+        assert!((out[1] - 3.0).abs() < 1e-6);
+        assert!((out[2] - 6.0).abs() < 1e-6);
+        assert!((out[9] - 27.0).abs() < 1e-6);
     }
 }

@@ -169,6 +169,10 @@ impl crate::VoiceActivityDetector for SileroVad {
             return VadResult::Unknown;
         }
 
+        // Reset LSTM state before each chunk to prevent drift in long-running
+        // streams. Each 5-second chunk is evaluated independently.
+        self.reset_state();
+
         // Silero VAD expects fixed-size frames: 512 samples @ 16kHz, 256 @ 8kHz.
         let window_size = match self.config.sample_rate {
             8000 => 256,
@@ -178,6 +182,8 @@ impl crate::VoiceActivityDetector for SileroVad {
         // Process the audio in fixed-size windows. If any window contains
         // speech, the entire buffer is considered speech.
         let mut found_speech = false;
+        let num_windows = (audio_frame.len() + window_size - 1) / window_size;
+        let mut windows_processed = 0u32;
         for chunk in audio_frame.chunks(window_size) {
             // Pad the last chunk if it's smaller than window_size.
             let frame = if chunk.len() < window_size {
@@ -188,6 +194,7 @@ impl crate::VoiceActivityDetector for SileroVad {
                 chunk.to_vec()
             };
 
+            windows_processed += 1;
             match self.detect_single_frame(&frame) {
                 VadResult::Speech => {
                     found_speech = true;
@@ -198,11 +205,23 @@ impl crate::VoiceActivityDetector for SileroVad {
             }
         }
 
+        tracing::debug!(
+            found_speech,
+            windows_processed,
+            num_windows,
+            "VAD scan complete"
+        );
+
         if found_speech {
             VadResult::Speech
         } else {
             VadResult::Silence
         }
+    }
+
+    fn reset(&self) {
+        self.reset_state();
+        tracing::debug!("VAD LSTM state reset");
     }
 }
 
@@ -343,6 +362,8 @@ impl SileroVad {
                 }
             }
         }
+
+        tracing::trace!(prob, threshold = self.config.threshold, "VAD frame probability");
 
         if prob >= self.config.threshold {
             VadResult::Speech

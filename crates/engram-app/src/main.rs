@@ -196,7 +196,10 @@ async fn audio_capture_loop(
                 continue;
             }
 
-            tracing::debug!(samples = samples.len(), "Audio tick — processing samples");
+            // Compute RMS and peak to verify signal is present.
+            let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+            let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+            tracing::debug!(samples = samples.len(), rms, peak, "Audio tick — processing samples");
 
             // Step 2: Voice Activity Detection.
             let is_speech = if let Some(ref vad) = vad {
@@ -260,6 +263,7 @@ async fn audio_capture_loop(
                         tracing::warn!(error = %e, "Whisper transcription failed");
                     }
                 }
+
             }
         }
     }

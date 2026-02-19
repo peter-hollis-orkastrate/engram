@@ -1335,11 +1335,8 @@ mod tests {
         run_migrations(&conn).unwrap();
 
         // Insert session first (FK).
-        conn.execute(
-            "INSERT INTO chat_sessions (id) VALUES ('sess-msg')",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-msg')", [])
+            .unwrap();
 
         conn.execute(
             "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-1', 'sess-msg', 'user', 'Hello')",
@@ -1368,11 +1365,8 @@ mod tests {
         let conn = open_test_conn();
         run_migrations(&conn).unwrap();
 
-        conn.execute(
-            "INSERT INTO chat_sessions (id) VALUES ('sess-role')",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-role')", [])
+            .unwrap();
 
         // Valid roles
         conn.execute(
@@ -1391,7 +1385,10 @@ mod tests {
             "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-bad', 'sess-role', 'system', 'test')",
             [],
         );
-        assert!(result.is_err(), "Invalid role should be rejected by CHECK constraint");
+        assert!(
+            result.is_err(),
+            "Invalid role should be rejected by CHECK constraint"
+        );
     }
 
     #[test]
@@ -1399,11 +1396,8 @@ mod tests {
         let conn = open_test_conn();
         run_migrations(&conn).unwrap();
 
-        conn.execute(
-            "INSERT INTO chat_sessions (id) VALUES ('sess-del')",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-del')", [])
+            .unwrap();
 
         conn.execute(
             "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-del', 'sess-del', 'user', 'bye')",
@@ -1461,11 +1455,8 @@ mod tests {
         let conn = open_test_conn();
         run_migrations(&conn).unwrap();
 
-        conn.execute(
-            "INSERT INTO chat_sessions (id) VALUES ('sess-ctx')",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-ctx')", [])
+            .unwrap();
 
         let context: String = conn
             .query_row(
@@ -1482,11 +1473,8 @@ mod tests {
         let conn = open_test_conn();
         run_migrations(&conn).unwrap();
 
-        conn.execute(
-            "INSERT INTO chat_sessions (id) VALUES ('sess-mc')",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-mc')", [])
+            .unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -1503,11 +1491,8 @@ mod tests {
         let conn = open_test_conn();
         run_migrations(&conn).unwrap();
 
-        conn.execute(
-            "INSERT INTO chat_sessions (id) VALUES ('sess-null')",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-null')", [])
+            .unwrap();
 
         conn.execute(
             "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-null', 'sess-null', 'user', 'hello')",
@@ -1543,7 +1528,10 @@ mod tests {
             "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-bad-fk', 'nonexistent', 'user', 'test')",
             [],
         );
-        assert!(result.is_err(), "FK constraint should reject invalid session_id");
+        assert!(
+            result.is_err(),
+            "FK constraint should reject invalid session_id"
+        );
     }
 
     #[test]
@@ -1551,11 +1539,8 @@ mod tests {
         let conn = open_test_conn();
         run_migrations(&conn).unwrap();
 
-        conn.execute(
-            "INSERT INTO chat_sessions (id) VALUES ('sess-upd')",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-upd')", [])
+            .unwrap();
 
         conn.execute(
             "UPDATE chat_sessions SET message_count = 5, last_message_at = datetime('now') WHERE id = 'sess-upd'",
@@ -1578,11 +1563,8 @@ mod tests {
         let conn = open_test_conn();
         run_migrations(&conn).unwrap();
 
-        conn.execute(
-            "INSERT INTO chat_sessions (id) VALUES ('sess-multi')",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-multi')", [])
+            .unwrap();
 
         for i in 0..10 {
             let role = if i % 2 == 0 { "user" } else { "assistant" };
@@ -1612,11 +1594,8 @@ mod tests {
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
 
-        conn.execute(
-            "INSERT INTO chat_sessions (id) VALUES ('sess-idem')",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-idem')", [])
+            .unwrap();
 
         let count: i64 = conn
             .query_row(

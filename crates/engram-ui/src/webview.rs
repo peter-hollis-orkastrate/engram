@@ -171,18 +171,18 @@ impl PlaceholderWindowHandle {
         // frameless popup (WS_POPUP). Returns 0 on failure.
         let hwnd = unsafe {
             CreateWindowExW(
-                0,                   // dwExStyle
-                CLASS_NAME.as_ptr(), // lpClassName
-                CLASS_NAME.as_ptr(), // lpWindowName (reuse class name)
+                0,                          // dwExStyle
+                CLASS_NAME.as_ptr(),        // lpClassName
+                CLASS_NAME.as_ptr(),        // lpWindowName (reuse class name)
                 WS_POPUP | WS_CLIPCHILDREN, // frameless popup, clip for webview
-                0,                   // x
-                0,                   // y
-                width as i32,        // nWidth
-                height as i32,       // nHeight
-                0,                   // hWndParent
-                0,                   // hMenu
-                0 as HINSTANCE,      // hInstance
-                std::ptr::null(),    // lpParam
+                0,                          // x
+                0,                          // y
+                width as i32,               // nWidth
+                height as i32,              // nHeight
+                0,                          // hWndParent
+                0,                          // hMenu
+                0 as HINSTANCE,             // hInstance
+                std::ptr::null(),           // lpParam
             )
         };
 
@@ -295,8 +295,10 @@ impl TrayPanelWebview {
             PlaceholderWindowHandle::create_hidden_window(self.config.width, self.config.height)?;
 
         // Inject the API port into the HTML so fetch calls target the right address.
-        let html = crate::tray_panel::TRAY_PANEL_HTML
-            .replace("http://localhost:3030", &format!("http://127.0.0.1:{}", api_port));
+        let html = crate::tray_panel::TRAY_PANEL_HTML.replace(
+            "http://localhost:3030",
+            &format!("http://127.0.0.1:{}", api_port),
+        );
 
         let webview = WebViewBuilder::new()
             .with_html(&html)

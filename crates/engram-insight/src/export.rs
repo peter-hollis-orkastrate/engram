@@ -214,7 +214,12 @@ mod tests {
             "/tmp/test-vault"
         };
         let result = VaultExporter::new(path);
-        assert!(result.is_ok(), "Failed for path {}: {:?}", path, result.err());
+        assert!(
+            result.is_ok(),
+            "Failed for path {}: {:?}",
+            path,
+            result.err()
+        );
     }
 
     #[test]

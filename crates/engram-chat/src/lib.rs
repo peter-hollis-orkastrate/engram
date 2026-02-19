@@ -18,7 +18,7 @@ pub use parser::QueryParser;
 pub use response::{ResponseGenerator, SearchResult};
 pub use types::{
     ChatConfig, ChatLlmConfig, ChatMessage, ChatMessageRecord, ChatMessageResponse, ChatRequest,
-    ChatResponse, ChatResponseBody, ChatSessionSummary, ChatSessionsResponse,
-    ConversationSession, QueryIntent, SessionContext, SourceRef, StructuredQuery, TimeRange, Turn,
+    ChatResponse, ChatResponseBody, ChatSessionSummary, ChatSessionsResponse, ConversationSession,
+    QueryIntent, SessionContext, SourceRef, StructuredQuery, TimeRange, Turn,
 };
 pub use voice::VoiceInterface;

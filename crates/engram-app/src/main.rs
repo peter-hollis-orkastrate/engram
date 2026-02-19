@@ -653,9 +653,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 detected_at: intent.detected_at.0.to_string(),
                                 acted_on: false,
                             };
-                            if let Err(e) = intent_db.with_conn(|conn| {
-                                engram_storage::store_intent(conn, &intent_row)
-                            }) {
+                            if let Err(e) = intent_db
+                                .with_conn(|conn| engram_storage::store_intent(conn, &intent_row))
+                            {
                                 tracing::warn!(error = %e, "Failed to persist intent");
                             }
 

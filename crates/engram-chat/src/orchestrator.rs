@@ -34,10 +34,8 @@ impl ChatOrchestrator {
     /// Create a new orchestrator with the given configuration.
     pub fn new(config: ChatConfig) -> Self {
         let parser = QueryParser::new(config.default_search_days);
-        let context_manager = ConversationManager::new(
-            config.context_turns,
-            config.session_timeout_minutes,
-        );
+        let context_manager =
+            ConversationManager::new(config.context_turns, config.session_timeout_minutes);
         let follow_up_resolver = FollowUpResolver;
         let response_generator = ResponseGenerator::new(config.max_results_per_query);
 
@@ -81,12 +79,14 @@ impl ChatOrchestrator {
 
         // If session has context, resolve follow-ups
         {
-            let sessions = self.sessions.lock().map_err(|e| {
-                ChatError::StorageError(format!("session lock poisoned: {}", e))
-            })?;
+            let sessions = self
+                .sessions
+                .lock()
+                .map_err(|e| ChatError::StorageError(format!("session lock poisoned: {}", e)))?;
             if let Some(session) = sessions.get(&sid) {
                 if !session.context.recent_turns.is_empty() {
-                    self.follow_up_resolver.resolve(&mut query, &session.context);
+                    self.follow_up_resolver
+                        .resolve(&mut query, &session.context);
                 }
             }
         }
@@ -103,20 +103,16 @@ impl ChatOrchestrator {
                     relevance_score: 0.75,
                     person: None,
                 }];
-                self.response_generator.compose_extractive(&mock_results, &query)
+                self.response_generator
+                    .compose_extractive(&mock_results, &query)
             }
             QueryIntent::Action => ChatResponse {
                 answer: format!("I'll route this to the action engine: {}", message),
                 sources: vec![],
                 confidence: 0.8,
-                suggestions: vec![
-                    "Check task status".to_string(),
-                    "List my tasks".to_string(),
-                ],
+                suggestions: vec!["Check task status".to_string(), "List my tasks".to_string()],
             },
-            QueryIntent::Question => {
-                self.response_generator.compose_analytics(&query, 0, "")
-            }
+            QueryIntent::Question => self.response_generator.compose_analytics(&query, 0, ""),
             QueryIntent::Clarification => {
                 // Use context to build a clarification response
                 let sessions = self.sessions.lock().map_err(|e| {
@@ -164,9 +160,10 @@ impl ChatOrchestrator {
         // Store messages in history
         let now = Local::now().timestamp();
         {
-            let mut msgs = self.messages.lock().map_err(|e| {
-                ChatError::StorageError(format!("messages lock poisoned: {}", e))
-            })?;
+            let mut msgs = self
+                .messages
+                .lock()
+                .map_err(|e| ChatError::StorageError(format!("messages lock poisoned: {}", e)))?;
             let entry = msgs.entry(sid).or_default();
             entry.push(ChatMessage {
                 id: Uuid::new_v4(),
@@ -183,20 +180,20 @@ impl ChatOrchestrator {
                 role: "assistant".to_string(),
                 content: response.answer.clone(),
                 sources: Some(serde_json::to_string(&response.sources).unwrap_or_default()),
-                suggestions: Some(
-                    serde_json::to_string(&response.suggestions).unwrap_or_default(),
-                ),
+                suggestions: Some(serde_json::to_string(&response.suggestions).unwrap_or_default()),
                 created_at: now,
             });
         }
 
         // Update session context
         {
-            let mut sessions = self.sessions.lock().map_err(|e| {
-                ChatError::StorageError(format!("session lock poisoned: {}", e))
-            })?;
+            let mut sessions = self
+                .sessions
+                .lock()
+                .map_err(|e| ChatError::StorageError(format!("session lock poisoned: {}", e)))?;
             if let Some(session) = sessions.get_mut(&sid) {
-                self.context_manager.update_session(session, &query, &response);
+                self.context_manager
+                    .update_session(session, &query, &response);
             }
         }
 
@@ -230,9 +227,10 @@ impl ChatOrchestrator {
 
     /// Delete a session by ID.
     pub fn delete_session(&self, session_id: Uuid) -> Result<(), ChatError> {
-        let mut sessions = self.sessions.lock().map_err(|e| {
-            ChatError::StorageError(format!("session lock poisoned: {}", e))
-        })?;
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|e| ChatError::StorageError(format!("session lock poisoned: {}", e)))?;
         if sessions.remove(&session_id).is_some() {
             // Also remove message history
             if let Ok(mut msgs) = self.messages.lock() {
@@ -248,17 +246,19 @@ impl ChatOrchestrator {
     pub fn get_history(&self, session_id: Uuid) -> Result<Vec<ChatMessage>, ChatError> {
         // Check session exists
         {
-            let sessions = self.sessions.lock().map_err(|e| {
-                ChatError::StorageError(format!("session lock poisoned: {}", e))
-            })?;
+            let sessions = self
+                .sessions
+                .lock()
+                .map_err(|e| ChatError::StorageError(format!("session lock poisoned: {}", e)))?;
             if !sessions.contains_key(&session_id) {
                 return Err(ChatError::SessionNotFound(session_id));
             }
         }
 
-        let msgs = self.messages.lock().map_err(|e| {
-            ChatError::StorageError(format!("messages lock poisoned: {}", e))
-        })?;
+        let msgs = self
+            .messages
+            .lock()
+            .map_err(|e| ChatError::StorageError(format!("messages lock poisoned: {}", e)))?;
         Ok(msgs.get(&session_id).cloned().unwrap_or_default())
     }
 
@@ -382,7 +382,9 @@ mod tests {
     #[test]
     fn test_handle_message_returns_response() {
         let orch = ChatOrchestrator::new(default_config());
-        let (resp, _) = orch.handle_message("what did I do yesterday", None).unwrap();
+        let (resp, _) = orch
+            .handle_message("what did I do yesterday", None)
+            .unwrap();
         assert!(!resp.answer.is_empty());
     }
 
@@ -418,14 +420,18 @@ mod tests {
     #[test]
     fn test_action_intent_response() {
         let orch = ChatOrchestrator::new(default_config());
-        let (resp, _) = orch.handle_message("remind me to check logs", None).unwrap();
+        let (resp, _) = orch
+            .handle_message("remind me to check logs", None)
+            .unwrap();
         assert!(resp.answer.contains("action engine"));
     }
 
     #[test]
     fn test_question_intent_response() {
         let orch = ChatOrchestrator::new(default_config());
-        let (resp, _) = orch.handle_message("how many meetings this week", None).unwrap();
+        let (resp, _) = orch
+            .handle_message("how many meetings this week", None)
+            .unwrap();
         assert!(resp.answer.contains("Based on your data"));
     }
 
@@ -637,7 +643,8 @@ mod tests {
         let orch = ChatOrchestrator::new(default_config());
         let (_, sid) = orch.handle_message("find deployment notes", None).unwrap();
         orch.handle_message("tell me more", Some(sid)).unwrap();
-        orch.handle_message("what about the budget", Some(sid)).unwrap();
+        orch.handle_message("what about the budget", Some(sid))
+            .unwrap();
 
         let session = orch.get_session(sid).unwrap();
         assert_eq!(session.message_count, 3);

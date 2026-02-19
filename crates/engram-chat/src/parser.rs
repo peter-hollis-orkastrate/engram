@@ -132,33 +132,142 @@ static KNOWN_APPS: &[&str] = &[
 ];
 
 static APP_RE: LazyLock<Regex> = LazyLock::new(|| {
-    let alts: Vec<String> = KNOWN_APPS
-        .iter()
-        .map(|a| regex::escape(a))
-        .collect();
+    let alts: Vec<String> = KNOWN_APPS.iter().map(|a| regex::escape(a)).collect();
     Regex::new(&format!(r"(?i)\b(?:{})\b", alts.join("|"))).unwrap()
 });
 
 // Stop words for topic extraction
 static STOP_WORDS: &[&str] = &[
-    "a", "an", "the", "is", "are", "was", "were", "am", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "shall", "should",
-    "may", "might", "must", "can", "could", "i", "me", "my", "we", "our", "you",
-    "your", "he", "she", "it", "they", "them", "his", "her", "its", "their",
-    "what", "which", "who", "whom", "this", "that", "these", "those", "of", "in",
-    "to", "for", "with", "on", "at", "from", "by", "about", "as", "into", "through",
-    "during", "before", "after", "above", "below", "between", "and", "but", "or",
-    "not", "no", "so", "if", "then", "than", "too", "very", "just", "also", "up",
-    "out", "all", "any", "some", "how", "when", "where", "why", "said", "did",
-    "find", "show", "search", "look", "tell", "more", "anything", "everything",
-    "something", "nothing", "much", "many", "long", "often", "remember",
+    "a",
+    "an",
+    "the",
+    "is",
+    "are",
+    "was",
+    "were",
+    "am",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "shall",
+    "should",
+    "may",
+    "might",
+    "must",
+    "can",
+    "could",
+    "i",
+    "me",
+    "my",
+    "we",
+    "our",
+    "you",
+    "your",
+    "he",
+    "she",
+    "it",
+    "they",
+    "them",
+    "his",
+    "her",
+    "its",
+    "their",
+    "what",
+    "which",
+    "who",
+    "whom",
+    "this",
+    "that",
+    "these",
+    "those",
+    "of",
+    "in",
+    "to",
+    "for",
+    "with",
+    "on",
+    "at",
+    "from",
+    "by",
+    "about",
+    "as",
+    "into",
+    "through",
+    "during",
+    "before",
+    "after",
+    "above",
+    "below",
+    "between",
+    "and",
+    "but",
+    "or",
+    "not",
+    "no",
+    "so",
+    "if",
+    "then",
+    "than",
+    "too",
+    "very",
+    "just",
+    "also",
+    "up",
+    "out",
+    "all",
+    "any",
+    "some",
+    "how",
+    "when",
+    "where",
+    "why",
+    "said",
+    "did",
+    "find",
+    "show",
+    "search",
+    "look",
+    "tell",
+    "more",
+    "anything",
+    "everything",
+    "something",
+    "nothing",
+    "much",
+    "many",
+    "long",
+    "often",
+    "remember",
 ];
 
 // Time-related words to strip from topic extraction
 static TIME_WORDS: &[&str] = &[
-    "yesterday", "today", "morning", "afternoon", "last", "this", "week", "month",
-    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-    "on", "between", "ago",
+    "yesterday",
+    "today",
+    "morning",
+    "afternoon",
+    "last",
+    "this",
+    "week",
+    "month",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "on",
+    "between",
+    "ago",
 ];
 
 // =============================================================================
@@ -174,7 +283,9 @@ pub struct QueryParser {
 impl QueryParser {
     /// Create a new parser with the given default search window.
     pub fn new(default_search_days: u32) -> Self {
-        Self { default_search_days }
+        Self {
+            default_search_days,
+        }
     }
 
     // -----------------------------------------------------------------
@@ -272,7 +383,8 @@ impl QueryParser {
                 .and_time(NaiveTime::from_hms_opt(0, 0, 0)?)
                 .and_local_timezone(Local)
                 .single()?;
-            let end_dt = now.date_naive()
+            let end_dt = now
+                .date_naive()
                 .and_time(NaiveTime::from_hms_opt(0, 0, 0)?)
                 .and_local_timezone(Local)
                 .single()?;
@@ -297,8 +409,7 @@ impl QueryParser {
 
         // "this week" (Monday to now)
         if tp.this_week.is_match(raw_query) {
-            let days_since_monday =
-                (now.weekday().num_days_from_monday()) as i64;
+            let days_since_monday = (now.weekday().num_days_from_monday()) as i64;
             let monday = now.date_naive() - Duration::days(days_since_monday);
             let start = monday
                 .and_time(NaiveTime::from_hms_opt(0, 0, 0)?)
@@ -536,15 +647,11 @@ fn is_stop_or_time_word(word: &str) -> bool {
 
 fn is_known_app(word: &str) -> bool {
     let lower = word.to_lowercase();
-    KNOWN_APPS
-        .iter()
-        .any(|a| a.to_lowercase() == lower)
+    KNOWN_APPS.iter().any(|a| a.to_lowercase() == lower)
 }
 
 fn is_known_app_lower(lower: &str) -> bool {
-    KNOWN_APPS
-        .iter()
-        .any(|a| a.to_lowercase() == lower)
+    KNOWN_APPS.iter().any(|a| a.to_lowercase() == lower)
 }
 
 /// Normalize matched app text to canonical casing.
@@ -574,190 +681,298 @@ mod tests {
 
     #[test]
     fn test_intent_what_did() {
-        assert_eq!(parser().classify_intent("what did I do yesterday"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("what did I do yesterday"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_find() {
-        assert_eq!(parser().classify_intent("find my notes on rust"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("find my notes on rust"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_show_me() {
-        assert_eq!(parser().classify_intent("show me everything from last week"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("show me everything from last week"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_when_did() {
-        assert_eq!(parser().classify_intent("when did we discuss the budget"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("when did we discuss the budget"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_where_did() {
-        assert_eq!(parser().classify_intent("where did I save that file"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("where did I save that file"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_who_said() {
-        assert_eq!(parser().classify_intent("who said something about testing"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("who said something about testing"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_search_for() {
-        assert_eq!(parser().classify_intent("search for API design"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("search for API design"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_look_for() {
-        assert_eq!(parser().classify_intent("look for the meeting notes"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("look for the meeting notes"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_what_was() {
-        assert_eq!(parser().classify_intent("what was discussed in standup"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("what was discussed in standup"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_anything_about() {
-        assert_eq!(parser().classify_intent("anything about deployment"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("anything about deployment"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_do_you_remember() {
-        assert_eq!(parser().classify_intent("do you remember that conversation"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("do you remember that conversation"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_what_happened() {
-        assert_eq!(parser().classify_intent("what happened in the meeting"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("what happened in the meeting"),
+            QueryIntent::Search
+        );
     }
 
     // ---- Intent classification: Action patterns ----
 
     #[test]
     fn test_intent_remind_me() {
-        assert_eq!(parser().classify_intent("remind me to call Bob"), QueryIntent::Action);
+        assert_eq!(
+            parser().classify_intent("remind me to call Bob"),
+            QueryIntent::Action
+        );
     }
 
     #[test]
     fn test_intent_save_this() {
-        assert_eq!(parser().classify_intent("save this as a bookmark"), QueryIntent::Action);
+        assert_eq!(
+            parser().classify_intent("save this as a bookmark"),
+            QueryIntent::Action
+        );
     }
 
     #[test]
     fn test_intent_create_a_task() {
-        assert_eq!(parser().classify_intent("create a task for code review"), QueryIntent::Action);
+        assert_eq!(
+            parser().classify_intent("create a task for code review"),
+            QueryIntent::Action
+        );
     }
 
     #[test]
     fn test_intent_set_a_reminder() {
-        assert_eq!(parser().classify_intent("set a reminder for tomorrow"), QueryIntent::Action);
+        assert_eq!(
+            parser().classify_intent("set a reminder for tomorrow"),
+            QueryIntent::Action
+        );
     }
 
     #[test]
     fn test_intent_bookmark() {
-        assert_eq!(parser().classify_intent("bookmark this page"), QueryIntent::Action);
+        assert_eq!(
+            parser().classify_intent("bookmark this page"),
+            QueryIntent::Action
+        );
     }
 
     #[test]
     fn test_intent_schedule() {
-        assert_eq!(parser().classify_intent("schedule a meeting for Friday"), QueryIntent::Action);
+        assert_eq!(
+            parser().classify_intent("schedule a meeting for Friday"),
+            QueryIntent::Action
+        );
     }
 
     #[test]
     fn test_intent_mark_this() {
-        assert_eq!(parser().classify_intent("mark this as important"), QueryIntent::Action);
+        assert_eq!(
+            parser().classify_intent("mark this as important"),
+            QueryIntent::Action
+        );
     }
 
     #[test]
     fn test_intent_note_that() {
-        assert_eq!(parser().classify_intent("note that the deadline moved"), QueryIntent::Action);
+        assert_eq!(
+            parser().classify_intent("note that the deadline moved"),
+            QueryIntent::Action
+        );
     }
 
     // ---- Intent classification: Question patterns ----
 
     #[test]
     fn test_intent_how_many() {
-        assert_eq!(parser().classify_intent("how many meetings this week"), QueryIntent::Question);
+        assert_eq!(
+            parser().classify_intent("how many meetings this week"),
+            QueryIntent::Question
+        );
     }
 
     #[test]
     fn test_intent_how_long() {
-        assert_eq!(parser().classify_intent("how long was the standup"), QueryIntent::Question);
+        assert_eq!(
+            parser().classify_intent("how long was the standup"),
+            QueryIntent::Question
+        );
     }
 
     #[test]
     fn test_intent_how_often() {
-        assert_eq!(parser().classify_intent("how often do we deploy"), QueryIntent::Question);
+        assert_eq!(
+            parser().classify_intent("how often do we deploy"),
+            QueryIntent::Question
+        );
     }
 
     #[test]
     fn test_intent_whats_the_count() {
-        assert_eq!(parser().classify_intent("what's the count of open issues"), QueryIntent::Question);
+        assert_eq!(
+            parser().classify_intent("what's the count of open issues"),
+            QueryIntent::Question
+        );
     }
 
     #[test]
     fn test_intent_what_percentage() {
-        assert_eq!(parser().classify_intent("what percentage of time in meetings"), QueryIntent::Question);
+        assert_eq!(
+            parser().classify_intent("what percentage of time in meetings"),
+            QueryIntent::Question
+        );
     }
 
     #[test]
     fn test_intent_how_much_time() {
-        assert_eq!(parser().classify_intent("how much time did I spend in Teams"), QueryIntent::Question);
+        assert_eq!(
+            parser().classify_intent("how much time did I spend in Teams"),
+            QueryIntent::Question
+        );
     }
 
     #[test]
     fn test_intent_total_number() {
-        assert_eq!(parser().classify_intent("total number of tasks completed"), QueryIntent::Question);
+        assert_eq!(
+            parser().classify_intent("total number of tasks completed"),
+            QueryIntent::Question
+        );
     }
 
     #[test]
     fn test_intent_how_much() {
-        assert_eq!(parser().classify_intent("how much data was captured"), QueryIntent::Question);
+        assert_eq!(
+            parser().classify_intent("how much data was captured"),
+            QueryIntent::Question
+        );
     }
 
     // ---- Intent classification: Clarification patterns ----
 
     #[test]
     fn test_intent_what_do_you_mean() {
-        assert_eq!(parser().classify_intent("what do you mean by that"), QueryIntent::Clarification);
+        assert_eq!(
+            parser().classify_intent("what do you mean by that"),
+            QueryIntent::Clarification
+        );
     }
 
     #[test]
     fn test_intent_more_details() {
-        assert_eq!(parser().classify_intent("more details please"), QueryIntent::Clarification);
+        assert_eq!(
+            parser().classify_intent("more details please"),
+            QueryIntent::Clarification
+        );
     }
 
     #[test]
     fn test_intent_tell_me_more() {
-        assert_eq!(parser().classify_intent("tell me more"), QueryIntent::Clarification);
+        assert_eq!(
+            parser().classify_intent("tell me more"),
+            QueryIntent::Clarification
+        );
     }
 
     #[test]
     fn test_intent_explain() {
-        assert_eq!(parser().classify_intent("explain that response"), QueryIntent::Clarification);
+        assert_eq!(
+            parser().classify_intent("explain that response"),
+            QueryIntent::Clarification
+        );
     }
 
     #[test]
     fn test_intent_elaborate() {
-        assert_eq!(parser().classify_intent("can you elaborate on that"), QueryIntent::Clarification);
+        assert_eq!(
+            parser().classify_intent("can you elaborate on that"),
+            QueryIntent::Clarification
+        );
     }
 
     #[test]
     fn test_intent_can_you_clarify() {
-        assert_eq!(parser().classify_intent("can you clarify what you found"), QueryIntent::Clarification);
+        assert_eq!(
+            parser().classify_intent("can you clarify what you found"),
+            QueryIntent::Clarification
+        );
     }
 
     #[test]
     fn test_intent_what_about() {
-        assert_eq!(parser().classify_intent("what about the budget"), QueryIntent::Clarification);
+        assert_eq!(
+            parser().classify_intent("what about the budget"),
+            QueryIntent::Clarification
+        );
     }
 
     // ---- Intent: fallback ----
 
     #[test]
     fn test_intent_fallback_to_search() {
-        assert_eq!(parser().classify_intent("random text with no pattern"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("random text with no pattern"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
@@ -767,16 +982,27 @@ mod tests {
 
     #[test]
     fn test_intent_case_insensitive() {
-        assert_eq!(parser().classify_intent("REMIND ME to call Bob"), QueryIntent::Action);
-        assert_eq!(parser().classify_intent("HOW MANY meetings"), QueryIntent::Question);
-        assert_eq!(parser().classify_intent("TELL ME MORE"), QueryIntent::Clarification);
+        assert_eq!(
+            parser().classify_intent("REMIND ME to call Bob"),
+            QueryIntent::Action
+        );
+        assert_eq!(
+            parser().classify_intent("HOW MANY meetings"),
+            QueryIntent::Question
+        );
+        assert_eq!(
+            parser().classify_intent("TELL ME MORE"),
+            QueryIntent::Clarification
+        );
     }
 
     // ---- Time extraction ----
 
     #[test]
     fn test_time_yesterday() {
-        let tr = parser().extract_time_range("what happened yesterday").unwrap();
+        let tr = parser()
+            .extract_time_range("what happened yesterday")
+            .unwrap();
         let now = Local::now();
         let yesterday_start = (now.date_naive() - Duration::days(1))
             .and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap())
@@ -825,7 +1051,9 @@ mod tests {
 
     #[test]
     fn test_time_this_afternoon() {
-        let tr = parser().extract_time_range("what about this afternoon").unwrap();
+        let tr = parser()
+            .extract_time_range("what about this afternoon")
+            .unwrap();
         let now = Local::now();
         let noon = now
             .date_naive()
@@ -860,7 +1088,9 @@ mod tests {
 
     #[test]
     fn test_time_this_week() {
-        let tr = parser().extract_time_range("how many meetings this week").unwrap();
+        let tr = parser()
+            .extract_time_range("how many meetings this week")
+            .unwrap();
         let now = Local::now();
         let days_since_monday = now.weekday().num_days_from_monday() as i64;
         let monday = (now.date_naive() - Duration::days(days_since_monday))
@@ -873,7 +1103,9 @@ mod tests {
 
     #[test]
     fn test_time_last_month() {
-        let tr = parser().extract_time_range("what did I do last month").unwrap();
+        let tr = parser()
+            .extract_time_range("what did I do last month")
+            .unwrap();
         let now = Local::now();
         let month_ago = (now - Duration::days(30))
             .date_naive()
@@ -900,7 +1132,8 @@ mod tests {
 
     #[test]
     fn test_people_from_context_pattern() {
-        let people = parser().extract_people("Sarah said the deadline is Friday", &["Sarah".into()]);
+        let people =
+            parser().extract_people("Sarah said the deadline is Friday", &["Sarah".into()]);
         assert!(people.iter().any(|p| p.eq_ignore_ascii_case("Sarah")));
     }
 
@@ -941,7 +1174,10 @@ mod tests {
 
     #[test]
     fn test_app_teams() {
-        assert_eq!(parser().extract_app("show me Teams messages"), Some("Teams".into()));
+        assert_eq!(
+            parser().extract_app("show me Teams messages"),
+            Some("Teams".into())
+        );
     }
 
     #[test]
@@ -956,7 +1192,10 @@ mod tests {
 
     #[test]
     fn test_app_vs_code() {
-        assert_eq!(parser().extract_app("I was coding in VS Code"), Some("VS Code".into()));
+        assert_eq!(
+            parser().extract_app("I was coding in VS Code"),
+            Some("VS Code".into())
+        );
     }
 
     #[test]
@@ -971,12 +1210,18 @@ mod tests {
 
     #[test]
     fn test_app_zoom() {
-        assert_eq!(parser().extract_app("during my Zoom call"), Some("Zoom".into()));
+        assert_eq!(
+            parser().extract_app("during my Zoom call"),
+            Some("Zoom".into())
+        );
     }
 
     #[test]
     fn test_app_terminal() {
-        assert_eq!(parser().extract_app("in the Terminal"), Some("Terminal".into()));
+        assert_eq!(
+            parser().extract_app("in the Terminal"),
+            Some("Terminal".into())
+        );
     }
 
     // ---- Topic extraction ----
@@ -984,7 +1229,9 @@ mod tests {
     #[test]
     fn test_topics_basic() {
         let topics = parser().extract_topics("what happened with deployment", &[], &None);
-        assert!(topics.contains(&"happened".to_string()) || topics.contains(&"deployment".to_string()));
+        assert!(
+            topics.contains(&"happened".to_string()) || topics.contains(&"deployment".to_string())
+        );
         assert!(topics.contains(&"deployment".to_string()));
     }
 
@@ -1021,7 +1268,10 @@ mod tests {
 
     #[test]
     fn test_parse_full_query() {
-        let q = parser().parse("what did Sarah say about deployment yesterday", &["Sarah".into()]);
+        let q = parser().parse(
+            "what did Sarah say about deployment yesterday",
+            &["Sarah".into()],
+        );
         assert_eq!(q.intent, QueryIntent::Search);
         assert!(q.people.iter().any(|p| p.eq_ignore_ascii_case("Sarah")));
         assert!(q.time_range.is_some());
@@ -1054,36 +1304,54 @@ mod tests {
 
     #[test]
     fn test_intent_open_app() {
-        assert_eq!(parser().classify_intent("open the editor"), QueryIntent::Action);
+        assert_eq!(
+            parser().classify_intent("open the editor"),
+            QueryIntent::Action
+        );
     }
 
     #[test]
     fn test_intent_set_reminder_no_article() {
-        assert_eq!(parser().classify_intent("set reminder for tomorrow"), QueryIntent::Action);
+        assert_eq!(
+            parser().classify_intent("set reminder for tomorrow"),
+            QueryIntent::Action
+        );
     }
 
     // ---- Intent: UPPERCASE full query ----
 
     #[test]
     fn test_intent_uppercase_search() {
-        assert_eq!(parser().classify_intent("WHAT DID I DO YESTERDAY"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("WHAT DID I DO YESTERDAY"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_uppercase_question() {
-        assert_eq!(parser().classify_intent("HOW OFTEN DO WE DEPLOY"), QueryIntent::Question);
+        assert_eq!(
+            parser().classify_intent("HOW OFTEN DO WE DEPLOY"),
+            QueryIntent::Question
+        );
     }
 
     #[test]
     fn test_intent_uppercase_action() {
-        assert_eq!(parser().classify_intent("BOOKMARK THIS PAGE"), QueryIntent::Action);
+        assert_eq!(
+            parser().classify_intent("BOOKMARK THIS PAGE"),
+            QueryIntent::Action
+        );
     }
 
     // ---- Intent: mixed case ----
 
     #[test]
     fn test_intent_mixed_case_clarification() {
-        assert_eq!(parser().classify_intent("What Do You Mean by that"), QueryIntent::Clarification);
+        assert_eq!(
+            parser().classify_intent("What Do You Mean by that"),
+            QueryIntent::Clarification
+        );
     }
 
     // ---- Time extraction: individual weekdays ----
@@ -1186,7 +1454,10 @@ mod tests {
     fn test_people_no_duplicates() {
         // "Sarah said" pattern + known entity match should not produce two entries
         let people = parser().extract_people("Sarah said hello", &["Sarah".into()]);
-        let sarah_count = people.iter().filter(|p| p.eq_ignore_ascii_case("Sarah")).count();
+        let sarah_count = people
+            .iter()
+            .filter(|p| p.eq_ignore_ascii_case("Sarah"))
+            .count();
         assert_eq!(sarah_count, 1);
     }
 
@@ -1203,12 +1474,18 @@ mod tests {
 
     #[test]
     fn test_app_firefox() {
-        assert_eq!(parser().extract_app("browsing in Firefox"), Some("Firefox".into()));
+        assert_eq!(
+            parser().extract_app("browsing in Firefox"),
+            Some("Firefox".into())
+        );
     }
 
     #[test]
     fn test_app_outlook() {
-        assert_eq!(parser().extract_app("check Outlook email"), Some("Outlook".into()));
+        assert_eq!(
+            parser().extract_app("check Outlook email"),
+            Some("Outlook".into())
+        );
     }
 
     #[test]
@@ -1223,22 +1500,34 @@ mod tests {
 
     #[test]
     fn test_app_powerpoint() {
-        assert_eq!(parser().extract_app("slides in PowerPoint"), Some("PowerPoint".into()));
+        assert_eq!(
+            parser().extract_app("slides in PowerPoint"),
+            Some("PowerPoint".into())
+        );
     }
 
     #[test]
     fn test_app_onenote() {
-        assert_eq!(parser().extract_app("notes in OneNote"), Some("OneNote".into()));
+        assert_eq!(
+            parser().extract_app("notes in OneNote"),
+            Some("OneNote".into())
+        );
     }
 
     #[test]
     fn test_app_notepad() {
-        assert_eq!(parser().extract_app("edited in Notepad"), Some("Notepad".into()));
+        assert_eq!(
+            parser().extract_app("edited in Notepad"),
+            Some("Notepad".into())
+        );
     }
 
     #[test]
     fn test_app_discord() {
-        assert_eq!(parser().extract_app("chatting on Discord"), Some("Discord".into()));
+        assert_eq!(
+            parser().extract_app("chatting on Discord"),
+            Some("Discord".into())
+        );
     }
 
     // ---- Topic extraction: edge cases ----
@@ -1260,7 +1549,8 @@ mod tests {
     #[test]
     fn test_topics_multi_word_app_filtered() {
         // "VS Code" should have both "vs" and "code" filtered
-        let topics = parser().extract_topics("code in VS Code editor", &[], &Some("VS Code".into()));
+        let topics =
+            parser().extract_topics("code in VS Code editor", &[], &Some("VS Code".into()));
         assert!(!topics.contains(&"code".to_string()));
     }
 
@@ -1269,12 +1559,18 @@ mod tests {
     #[test]
     fn test_intent_with_unicode() {
         // Should not panic on unicode input
-        assert_eq!(parser().classify_intent("quelle est la réunion"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("quelle est la réunion"),
+            QueryIntent::Search
+        );
     }
 
     #[test]
     fn test_intent_with_emoji() {
-        assert_eq!(parser().classify_intent("find notes about 🚀 deployment"), QueryIntent::Search);
+        assert_eq!(
+            parser().classify_intent("find notes about 🚀 deployment"),
+            QueryIntent::Search
+        );
     }
 
     #[test]

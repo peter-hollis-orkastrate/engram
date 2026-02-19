@@ -56,8 +56,8 @@ impl ResponseGenerator {
         }
 
         let limited = &results[..results.len().min(self.max_results)];
-        let avg_confidence = limited.iter().map(|r| r.relevance_score).sum::<f32>()
-            / limited.len() as f32;
+        let avg_confidence =
+            limited.iter().map(|r| r.relevance_score).sum::<f32>() / limited.len() as f32;
 
         let answer = if limited.len() == 1 {
             self.single_result_answer(&limited[0])
@@ -478,10 +478,7 @@ mod tests {
 
     #[test]
     fn test_two_results_is_multi() {
-        let results = vec![
-            make_result("First", 0.9),
-            make_result("Second", 0.8),
-        ];
+        let results = vec![make_result("First", 0.9), make_result("Second", 0.8)];
         let resp = gen().compose_extractive(&results, &make_query_search());
         assert!(resp.answer.contains("2 times"));
         assert_eq!(resp.sources.len(), 2);
@@ -503,7 +500,9 @@ mod tests {
     fn test_suggestions_no_results() {
         let suggestions = gen().generate_suggestions(&make_query_search(), &[]);
         // No "tell me more" since results are empty
-        assert!(!suggestions.iter().any(|s| s.contains("Tell me more about this")));
+        assert!(!suggestions
+            .iter()
+            .any(|s| s.contains("Tell me more about this")));
     }
 
     // ---- Suggestions: no duplicate of current query ----
@@ -533,7 +532,10 @@ mod tests {
     #[test]
     fn test_suggestions_max_four() {
         let mut q = make_query_search();
-        q.time_range = Some(TimeRange { start: 1000, end: 2000 });
+        q.time_range = Some(TimeRange {
+            start: 1000,
+            end: 2000,
+        });
         q.people = vec!["Alice".to_string()];
         let results = vec![make_result_with_person("content", "Bob")];
         let suggestions = gen().generate_suggestions(&q, &results);
@@ -569,9 +571,15 @@ mod tests {
     #[test]
     fn test_analytics_suggestions_with_time_range() {
         let mut q = make_query_search();
-        q.time_range = Some(TimeRange { start: 1000, end: 2000 });
+        q.time_range = Some(TimeRange {
+            start: 1000,
+            end: 2000,
+        });
         let resp = gen().compose_analytics(&q, 3, "data here");
-        assert!(resp.suggestions.iter().any(|s| s.contains("previous period")));
+        assert!(resp
+            .suggestions
+            .iter()
+            .any(|s| s.contains("previous period")));
     }
 
     // ---- Max results: exactly at limit ----
@@ -624,6 +632,9 @@ mod tests {
     fn test_no_results_has_suggestions() {
         let resp = gen().compose_extractive(&[], &make_query_search());
         assert!(!resp.suggestions.is_empty());
-        assert!(resp.suggestions.iter().any(|s| s.contains("keywords") || s.contains("time range")));
+        assert!(resp
+            .suggestions
+            .iter()
+            .any(|s| s.contains("keywords") || s.contains("time range")));
     }
 }

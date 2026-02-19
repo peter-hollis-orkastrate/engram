@@ -1,8 +1,8 @@
 //! Dashboard HTML generation and embedding.
 //!
 //! The Engram dashboard is a single self-contained HTML file with all CSS and
-//! JavaScript inlined. It provides 8 tabbed views: Dashboard, Timeline, Search,
-//! Apps, Transcriptions, Dictation, Storage, and Settings.
+//! JavaScript inlined. It provides 9 tabbed views: Dashboard, Timeline, Search,
+//! Apps, Transcriptions, Dictation, Storage, Chat, and Settings.
 //!
 //! The HTML is embedded at compile time via `include_str!` so the binary has no
 //! external file dependencies at runtime.
@@ -64,6 +64,7 @@ mod tests {
         assert!(DASHBOARD_HTML.contains("id=\"view-dictation\""));
         assert!(DASHBOARD_HTML.contains("id=\"view-storage\""));
         assert!(DASHBOARD_HTML.contains("id=\"view-settings\""));
+        assert!(DASHBOARD_HTML.contains("id=\"view-chat\""));
     }
 
     #[test]
@@ -103,6 +104,7 @@ mod tests {
         assert!(DASHBOARD_HTML.contains("/storage/stats"));
         assert!(DASHBOARD_HTML.contains("/config"));
         assert!(DASHBOARD_HTML.contains("/dictation/history"));
+        assert!(DASHBOARD_HTML.contains("/chat/sessions"));
     }
 
     #[test]
@@ -117,5 +119,49 @@ mod tests {
         assert!(DASHBOARD_HTML.contains("role="));
         assert!(DASHBOARD_HTML.contains("skip-link"));
         assert!(DASHBOARD_HTML.contains("prefers-reduced-motion"));
+    }
+
+    // ---- Chat UI element tests ----
+
+    #[test]
+    fn dashboard_html_has_chat_input_elements() {
+        assert!(DASHBOARD_HTML.contains("id=\"chat-input\""));
+        assert!(DASHBOARD_HTML.contains("id=\"chat-send-btn\""));
+        assert!(DASHBOARD_HTML.contains("id=\"new-chat-btn\""));
+        assert!(DASHBOARD_HTML.contains("id=\"chat-messages\""));
+    }
+
+    #[test]
+    fn dashboard_html_has_chat_css_classes() {
+        assert!(DASHBOARD_HTML.contains(".chat-messages"));
+        assert!(DASHBOARD_HTML.contains(".user-message"));
+        assert!(DASHBOARD_HTML.contains(".assistant-message"));
+        assert!(DASHBOARD_HTML.contains(".suggestion-chip"));
+        assert!(DASHBOARD_HTML.contains(".chat-input"));
+        assert!(DASHBOARD_HTML.contains(".chat-send-btn"));
+    }
+
+    #[test]
+    fn dashboard_html_has_chat_js_functions() {
+        assert!(DASHBOARD_HTML.contains("sendChatMessage"));
+        assert!(DASHBOARD_HTML.contains("loadChatSessions"));
+        assert!(DASHBOARD_HTML.contains("loadChatHistory"));
+    }
+
+    #[test]
+    fn dashboard_html_references_chat_api_endpoints() {
+        assert!(DASHBOARD_HTML.contains("/chat/sessions"));
+        assert!(DASHBOARD_HTML.contains("/chat"));
+        assert!(DASHBOARD_HTML.contains("/chat/history"));
+    }
+
+    #[test]
+    fn dashboard_html_chat_has_accessibility() {
+        // Chat messages container has role="log" for screen readers
+        assert!(DASHBOARD_HTML.contains("role=\"log\""));
+        // Chat input has aria-label
+        assert!(DASHBOARD_HTML.contains("aria-label=\"Chat message input\""));
+        // Send button has aria-label
+        assert!(DASHBOARD_HTML.contains("aria-label=\"Send message\""));
     }
 }

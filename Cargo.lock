@@ -1142,6 +1142,7 @@ dependencies = [
  "engram-api",
  "engram-audio",
  "engram-capture",
+ "engram-chat",
  "engram-core",
  "engram-dictation",
  "engram-insight",

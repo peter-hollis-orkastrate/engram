@@ -6,7 +6,7 @@
 //!
 //! # Modules
 //!
-//! - [`dashboard`]: Full web dashboard served from the `/ui` endpoint (8 tabbed views)
+//! - [`dashboard`]: Full web dashboard served from the `/ui` endpoint (9 tabbed views)
 //! - [`tray_panel`]: Compact 400x500px panel for the system tray webview popup
 //!
 //! # Usage

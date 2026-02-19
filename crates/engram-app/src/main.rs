@@ -739,6 +739,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("Action engine disabled in config");
     }
 
+    // === Chat Interface ===
+    let state = if config.chat.enabled {
+        let chat_config = engram_chat::ChatConfig {
+            enabled: config.chat.enabled,
+            voice_hotkey: config.chat.voice_hotkey.clone(),
+            context_turns: config.chat.context_turns,
+            session_timeout_minutes: config.chat.session_timeout_minutes,
+            max_voice_duration_seconds: config.chat.max_voice_duration_seconds,
+            default_search_days: config.chat.default_search_days,
+            max_results_per_query: config.chat.max_results_per_query,
+            llm: engram_chat::ChatLlmConfig {
+                enabled: config.chat.llm.enabled,
+                model_path: config.chat.llm.model_path.clone(),
+                max_tokens: config.chat.llm.max_tokens,
+                temperature: config.chat.llm.temperature,
+            },
+        };
+        let chat_orchestrator = Arc::new(engram_chat::ChatOrchestrator::new(chat_config));
+        tracing::info!("Chat interface: enabled");
+        state.with_chat(chat_orchestrator)
+    } else {
+        tracing::info!("Chat interface: disabled");
+        state
+    };
+
     // === System Tray ===
     // The tray icon must be created AND its event loop run on the same
     // dedicated thread (Win32 requires a message pump for tray events).
@@ -1291,6 +1316,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Signal background tasks to stop.
     audio_active.store(false, Ordering::Relaxed);
     tray_stop.store(true, Ordering::Relaxed);
+    tracing::info!("Chat interface shut down");
 
     // Flush and close with a 5-second deadline.
     let cleanup = async {

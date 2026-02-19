@@ -1245,6 +1245,7 @@ pub async fn ingest(
         .window_title
         .unwrap_or_else(|| "API Ingest".to_string());
 
+    let ingest_text = body.text.clone();
     let frame = engram_core::types::ScreenFrame {
         id: Uuid::new_v4(),
         content_type: engram_core::types::ContentType::Screen,
@@ -1269,7 +1270,8 @@ pub async fn ingest(
                 frame_id: id,
                 app_name: engram_core::types::AppName("api".to_string()),
                 window_title: engram_core::types::WindowTitle::new("API Ingest".to_string()),
-                text_length: 0,
+                text_length: ingest_text.len(),
+                text: Some(ingest_text.clone()),
                 timestamp: engram_core::types::Timestamp::now(),
             });
             (true, Some(id), "Stored".to_string())
@@ -1282,7 +1284,8 @@ pub async fn ingest(
                 frame_id: id,
                 app_name: engram_core::types::AppName("api".to_string()),
                 window_title: engram_core::types::WindowTitle::new("API Ingest".to_string()),
-                text_length: 0,
+                text_length: ingest_text.len(),
+                text: Some(ingest_text.clone()),
                 timestamp: engram_core::types::Timestamp::now(),
             });
             (
@@ -1818,7 +1821,7 @@ pub async fn update_task(
     }
 }
 
-/// DELETE /tasks/:id - dismiss a task.
+/// DELETE /tasks/:id - hard-delete a task from the store.
 pub async fn delete_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1826,16 +1829,13 @@ pub async fn delete_task(
     let uuid = id
         .parse::<uuid::Uuid>()
         .map_err(|_| ApiError::BadRequest("Invalid task ID".to_string()))?;
-    let dismissed = state.task_store.dismiss(uuid).map_err(|e| match e {
+    let removed = state.task_store.remove(uuid).map_err(|e| match e {
         engram_action::TaskError::NotFound(_) => {
             ApiError::NotFound(format!("Task {} not found", id))
         }
-        engram_action::TaskError::InvalidTransition(_, _) => {
-            ApiError::BadRequest(format!("Cannot dismiss task: {}", e))
-        }
-        _ => ApiError::Internal(format!("Failed to dismiss task: {}", e)),
+        _ => ApiError::Internal(format!("Failed to delete task: {}", e)),
     })?;
-    Ok(Json(task_to_response(&dismissed)))
+    Ok(Json(task_to_response(&removed)))
 }
 
 /// GET /actions/history - action execution history.
@@ -3398,12 +3398,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_task_dismiss() {
+    async fn test_delete_task_hard_delete() {
         let state = make_state();
         let task = state
             .task_store
             .create(
-                "Dismiss me".to_string(),
+                "Delete me".to_string(),
                 engram_action::ActionType::Reminder,
                 "{}".to_string(),
                 None,
@@ -3411,13 +3411,17 @@ mod tests {
                 None,
             )
             .unwrap();
-        // Move to Pending first (Detected -> Dismissed is invalid)
+        // Move to Active to prove hard-delete works from any state
         state
             .task_store
             .update_status(task.id, engram_action::TaskStatus::Pending)
             .unwrap();
+        state
+            .task_store
+            .update_status(task.id, engram_action::TaskStatus::Active)
+            .unwrap();
 
-        let app = crate::create_router(state);
+        let app = crate::create_router(state.clone());
         let resp = app
             .oneshot(
                 Request::delete(&format!("/tasks/{}", task.id))
@@ -3432,8 +3436,11 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
             .unwrap();
-        let dismissed: TaskResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(dismissed.status, "dismissed");
+        let deleted: TaskResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(deleted.status, "active"); // Returns the task as it was before removal
+
+        // Verify task is gone
+        assert!(state.task_store.get(task.id).is_err());
     }
 
     #[tokio::test]

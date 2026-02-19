@@ -569,7 +569,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_shared_state(Arc::clone(&audio_active), Arc::clone(&dictation_engine));
 
     // === Action Engine ===
-    let action_config = engram_action::ActionConfig::default();
+    let action_config = engram_action::ActionConfig {
+        enabled: config.actions.enabled,
+        min_confidence: config.actions.min_confidence,
+        auto_execute_threshold: config.actions.auto_execute_threshold,
+        task_ttl_days: config.actions.task_ttl_days,
+        confirmation_timeout_seconds: config.actions.confirmation_timeout_seconds,
+        max_notifications_per_minute: config.actions.max_notifications_per_minute,
+        ..engram_action::ActionConfig::default()
+    };
     let action_task_store = Arc::new(engram_action::TaskStore::new());
     let action_confirmation_gate =
         Arc::new(engram_action::ConfirmationGate::new(action_config.clone()));
@@ -599,27 +607,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let intent_event_rx = state.event_tx.subscribe();
         let intent_task_store = Arc::clone(&action_task_store);
         let intent_state = state.clone();
+        let intent_db = Arc::clone(&state.database);
         tokio::spawn(async move {
             use tokio_stream::wrappers::BroadcastStream;
             use tokio_stream::StreamExt as _;
             let mut stream = BroadcastStream::new(intent_event_rx);
             while let Some(Ok(event_json)) = stream.next().await {
-                // Check if this is a ChunkStored event
+                // Check if this is a text_extracted or summary_generated event
                 let event_name: &str = event_json
                     .get("event")
                     .and_then(|v: &serde_json::Value| v.as_str())
                     .unwrap_or("");
-                if event_name == "chunk_stored" || event_name == "summary_generated" {
-                    // Extract text from the event
-                    if let Some(text) = event_json.get("text").and_then(|v: &serde_json::Value| v.as_str()) {
-                        let chunk_id = event_json
-                            .get("chunk_id")
+                if event_name == "text_extracted" || event_name == "summary_generated" {
+                    // Extract text from the event data.
+                    // DomainEvent serializes as externally-tagged enum, so the data
+                    // is nested under the variant name: {"TextExtracted": {"text": ...}}
+                    let data = event_json.get("data");
+                    let variant_key = match event_name {
+                        "text_extracted" => "TextExtracted",
+                        "summary_generated" => "SummaryGenerated",
+                        _ => "",
+                    };
+                    let inner = data.and_then(|d| d.get(variant_key));
+                    let text_value = inner
+                        .and_then(|d: &serde_json::Value| d.get("text"))
+                        .and_then(|v: &serde_json::Value| v.as_str());
+                    if let Some(text) = text_value {
+                        let chunk_id = inner
+                            .and_then(|d: &serde_json::Value| d.get("frame_id"))
                             .and_then(|v: &serde_json::Value| v.as_str())
                             .and_then(|s| uuid::Uuid::parse_str(s).ok())
                             .unwrap_or_else(uuid::Uuid::new_v4);
 
                         let intents = intent_detector.detect(text, chunk_id);
                         for intent in &intents {
+                            // Persist intent to SQLite
+                            let intent_row = engram_storage::IntentRow {
+                                id: intent.id.to_string(),
+                                intent_type: intent.intent_type.to_string(),
+                                raw_text: intent.raw_text.clone(),
+                                extracted_action: intent.extracted_action.clone(),
+                                extracted_time: intent.extracted_time.map(|t| t.0.to_string()),
+                                confidence: intent.confidence as f64,
+                                source_chunk_id: intent.source_chunk_id.to_string(),
+                                detected_at: intent.detected_at.0.to_string(),
+                                acted_on: false,
+                            };
+                            if let Err(e) = intent_db.with_conn(|conn| {
+                                engram_storage::store_intent(conn, &intent_row)
+                            }) {
+                                tracing::warn!(error = %e, "Failed to persist intent");
+                            }
+
                             // Emit IntentDetected event
                             intent_state.publish_event(
                                 engram_core::events::DomainEvent::IntentDetected {
@@ -701,14 +740,77 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // === System Tray ===
-    let _tray = if !cli_args.headless {
-        match engram_ui::tray::TrayService::new() {
-            Ok(tray) => {
-                tracing::info!("System tray initialized");
-                Some(tray)
-            }
+    // The tray icon must be created AND its event loop run on the same
+    // dedicated thread (Win32 requires a message pump for tray events).
+    let tray_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let tray_stop_clone = Arc::clone(&tray_stop);
+    let tray_port = config.general.port;
+    let _tray_thread = if !cli_args.headless {
+        let handle = std::thread::Builder::new()
+            .name("engram-tray".into())
+            .spawn(move || {
+                let tray = match engram_ui::tray::TrayService::new() {
+                    Ok(t) => {
+                        tracing::info!("System tray initialized");
+                        t
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to create system tray — continuing without it");
+                        return;
+                    }
+                };
+
+                // Initialize the webview panel (hidden).
+                let mut panel = engram_ui::TrayPanelWebview::new(
+                    engram_ui::WebviewConfig::default(),
+                );
+                if let Err(e) = panel.init(tray_port) {
+                    tracing::warn!(error = %e, "Failed to init webview panel — left-click will open browser");
+                }
+
+                tray.run_event_loop(&tray_stop_clone, |event| {
+                    use engram_ui::tray::{TrayEvent, TrayMenuAction};
+                    match event {
+                        TrayEvent::IconClick { x, y } => {
+                            if let Err(e) = panel.toggle(x, y) {
+                                tracing::warn!(error = %e, "Failed to toggle panel");
+                            }
+                            true
+                        }
+                        TrayEvent::IconDoubleClick => {
+                            let url = format!("http://127.0.0.1:{}/ui", tray_port);
+                            #[cfg(target_os = "windows")]
+                            { let _ = std::process::Command::new("cmd").args(["/C", "start", &url]).spawn(); }
+                            #[cfg(not(target_os = "windows"))]
+                            { let _ = std::process::Command::new("xdg-open").arg(&url).spawn(); }
+                            true
+                        }
+                        TrayEvent::Menu(action) => match action {
+                            TrayMenuAction::OpenDashboard | TrayMenuAction::Search | TrayMenuAction::Settings => {
+                                let url = format!("http://127.0.0.1:{}/ui", tray_port);
+                                tracing::info!(url = %url, "Opening dashboard in browser");
+                                #[cfg(target_os = "windows")]
+                                { let _ = std::process::Command::new("cmd").args(["/C", "start", &url]).spawn(); }
+                                #[cfg(not(target_os = "windows"))]
+                                { let _ = std::process::Command::new("xdg-open").arg(&url).spawn(); }
+                                true
+                            }
+                            TrayMenuAction::ToggleDictation => {
+                                tracing::info!("Tray: toggle dictation requested");
+                                true
+                            }
+                            TrayMenuAction::Quit => {
+                                tracing::info!("Tray: quit requested");
+                                false
+                            }
+                        },
+                    }
+                });
+            });
+        match handle {
+            Ok(h) => Some(h),
             Err(e) => {
-                tracing::warn!(error = %e, "Failed to create system tray — continuing without it");
+                tracing::warn!(error = %e, "Failed to spawn tray thread");
                 None
             }
         }
@@ -1188,6 +1290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Signal background tasks to stop.
     audio_active.store(false, Ordering::Relaxed);
+    tray_stop.store(true, Ordering::Relaxed);
 
     // Flush and close with a 5-second deadline.
     let cleanup = async {

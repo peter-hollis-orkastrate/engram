@@ -29,6 +29,7 @@ pub enum DomainEvent {
         app_name: AppName,
         window_title: WindowTitle,
         text_length: usize,
+        text: Option<String>,
         timestamp: Timestamp,
     },
 
@@ -581,6 +582,7 @@ mod tests {
             app_name: AppName("Chrome".to_string()),
             window_title: WindowTitle::new("GitHub".to_string()),
             text_length: 500,
+            text: None,
             timestamp: ts,
         };
         assert_eq!(text_extracted.event_name(), "text_extracted");
@@ -738,6 +740,7 @@ mod tests {
                 app_name: AppName("App".to_string()),
                 window_title: WindowTitle::new("Win".to_string()),
                 text_length: 100,
+                text: None,
                 timestamp: ts,
             },
             DomainEvent::FrameSkipped {
@@ -1033,6 +1036,7 @@ mod tests {
                 app_name: AppName("App".to_string()),
                 window_title: WindowTitle::new("Title".to_string()),
                 text_length: 10,
+                text: None,
                 timestamp: ts,
             },
             DomainEvent::FrameSkipped {
@@ -1576,6 +1580,7 @@ mod tests {
                 app_name: AppName("A".to_string()),
                 window_title: WindowTitle::new("W".to_string()),
                 text_length: 1,
+                text: None,
                 timestamp: ts,
             },
             DomainEvent::FrameSkipped {
@@ -1938,6 +1943,7 @@ mod tests {
                 app_name: AppName("A".to_string()),
                 window_title: WindowTitle::new("W".to_string()),
                 text_length: 1,
+                text: None,
                 timestamp: ts,
             },
             DomainEvent::FrameSkipped {

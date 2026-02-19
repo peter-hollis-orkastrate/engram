@@ -144,6 +144,22 @@ impl TaskStore {
         self.update_status(id, TaskStatus::Dismissed)
     }
 
+    /// Hard-delete a task from the store regardless of its current status.
+    pub fn remove(&self, id: Uuid) -> Result<Task, TaskError> {
+        let mut tasks = self.tasks.lock().map_err(|e| {
+            TaskError::Storage(engram_core::error::EngramError::Storage(format!(
+                "Lock poisoned: {}",
+                e
+            )))
+        })?;
+
+        let pos = tasks
+            .iter()
+            .position(|t| t.id == id)
+            .ok_or(TaskError::NotFound(id))?;
+        Ok(tasks.remove(pos))
+    }
+
     /// Expire stale tasks older than `ttl_days`.
     ///
     /// Finds tasks in Pending or Active status whose `created_at` is older
@@ -579,5 +595,57 @@ mod tests {
         let store = TaskStore::default();
         let all = store.list(None, None, None);
         assert!(all.is_empty());
+    }
+
+    #[test]
+    fn test_remove_task() {
+        let store = TaskStore::new();
+        let task = store
+            .create(
+                "To remove".to_string(),
+                ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let removed = store.remove(task.id).unwrap();
+        assert_eq!(removed.id, task.id);
+
+        // Task should no longer exist
+        assert!(store.get(task.id).is_err());
+        assert!(store.list(None, None, None).is_empty());
+    }
+
+    #[test]
+    fn test_remove_active_task() {
+        let store = TaskStore::new();
+        let task = store
+            .create(
+                "Active task".to_string(),
+                ActionType::ShellCommand,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        store.update_status(task.id, TaskStatus::Pending).unwrap();
+        store.update_status(task.id, TaskStatus::Active).unwrap();
+
+        // Should succeed regardless of state
+        let removed = store.remove(task.id).unwrap();
+        assert_eq!(removed.status, TaskStatus::Active);
+        assert!(store.get(task.id).is_err());
+    }
+
+    #[test]
+    fn test_remove_not_found() {
+        let store = TaskStore::new();
+        let result = store.remove(Uuid::new_v4());
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), TaskError::NotFound(_)));
     }
 }

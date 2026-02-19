@@ -1187,6 +1187,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "engram-chat"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "engram-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "engram-core"
 version = "0.1.0"
 dependencies = [

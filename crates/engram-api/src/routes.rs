@@ -94,6 +94,21 @@ pub fn create_router(state: AppState) -> Router {
         .route("/entities", get(handlers::get_entities))
         .route("/summaries", get(handlers::get_summaries))
         .route("/insights/export", post(handlers::trigger_export))
+        // Action engine routes
+        .route(
+            "/tasks",
+            get(handlers::list_tasks).post(handlers::create_task),
+        )
+        .route(
+            "/tasks/{id}",
+            get(handlers::get_task)
+                .put(handlers::update_task)
+                .delete(handlers::delete_task),
+        )
+        .route("/actions/history", get(handlers::get_action_history))
+        .route("/intents", get(handlers::list_intents))
+        .route("/actions/{task_id}/approve", post(handlers::approve_action))
+        .route("/actions/{task_id}/dismiss", post(handlers::dismiss_action))
         .layer(axum::middleware::from_fn(
             crate::rate_limit::rate_limit_middleware,
         ))

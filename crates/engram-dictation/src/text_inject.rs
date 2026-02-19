@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_text_injector_default() {
-        let _injector = TextInjector::default();
+        let _injector = TextInjector;
     }
 
     #[cfg(not(target_os = "windows"))]

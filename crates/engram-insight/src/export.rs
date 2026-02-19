@@ -208,8 +208,13 @@ mod tests {
 
     #[test]
     fn test_vault_exporter_absolute_path_accepted() {
-        let result = VaultExporter::new("/tmp/test-vault");
-        assert!(result.is_ok());
+        let path = if cfg!(windows) {
+            "C:\\Users\\test\\vault"
+        } else {
+            "/tmp/test-vault"
+        };
+        let result = VaultExporter::new(path);
+        assert!(result.is_ok(), "Failed for path {}: {:?}", path, result.err());
     }
 
     #[test]

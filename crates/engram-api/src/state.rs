@@ -48,6 +48,14 @@ pub struct AppState {
     pub dictation_engine: Arc<DictationEngine>,
     /// Counter for successfully transcribed audio chunks.
     pub chunks_transcribed: Arc<AtomicU64>,
+    /// Action engine task store.
+    pub task_store: Arc<engram_action::TaskStore>,
+    /// Action engine confirmation gate.
+    pub confirmation_gate: Arc<engram_action::ConfirmationGate>,
+    /// Action engine orchestrator.
+    pub orchestrator: Arc<engram_action::Orchestrator>,
+    /// Action engine configuration.
+    pub action_config: engram_action::ActionConfig,
 }
 
 impl AppState {
@@ -87,6 +95,20 @@ impl AppState {
         let fts_search = Arc::new(FtsSearch::new(Arc::clone(&db_arc)));
         let query_service = Arc::new(QueryService::new(Arc::clone(&db_arc)));
 
+        let action_config = engram_action::ActionConfig::default();
+        let task_store = Arc::new(engram_action::TaskStore::new());
+        let confirmation_gate =
+            Arc::new(engram_action::ConfirmationGate::new(action_config.clone()));
+        let orchestrator = {
+            let mut registry = engram_action::ActionRegistry::new();
+            registry.register_defaults();
+            Arc::new(engram_action::Orchestrator::new(
+                registry,
+                Arc::clone(&task_store),
+                action_config.clone(),
+            ))
+        };
+
         Self {
             config: Arc::new(Mutex::new(config)),
             vector_index: index_arc,
@@ -102,6 +124,10 @@ impl AppState {
             audio_active: Arc::new(AtomicBool::new(false)),
             dictation_engine: Arc::new(DictationEngine::new()),
             chunks_transcribed: Arc::new(AtomicU64::new(0)),
+            task_store,
+            confirmation_gate,
+            orchestrator,
+            action_config,
         }
     }
 
@@ -135,6 +161,21 @@ impl AppState {
     ) -> Self {
         self.audio_active = audio_active;
         self.dictation_engine = dictation_engine;
+        self
+    }
+
+    /// Replace the action engine components.
+    pub fn with_action_engine(
+        mut self,
+        task_store: Arc<engram_action::TaskStore>,
+        confirmation_gate: Arc<engram_action::ConfirmationGate>,
+        orchestrator: Arc<engram_action::Orchestrator>,
+        config: engram_action::ActionConfig,
+    ) -> Self {
+        self.task_store = task_store;
+        self.confirmation_gate = confirmation_gate;
+        self.orchestrator = orchestrator;
+        self.action_config = config;
         self
     }
 }

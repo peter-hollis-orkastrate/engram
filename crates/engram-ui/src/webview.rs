@@ -174,7 +174,7 @@ impl PlaceholderWindowHandle {
                 0,                   // dwExStyle
                 CLASS_NAME.as_ptr(), // lpClassName
                 CLASS_NAME.as_ptr(), // lpWindowName (reuse class name)
-                WS_POPUP,            // dwStyle: frameless, not visible
+                WS_POPUP | WS_CLIPCHILDREN, // frameless popup, clip for webview
                 0,                   // x
                 0,                   // y
                 width as i32,        // nWidth
@@ -243,14 +243,32 @@ impl wry::raw_window_handle::HasWindowHandle for PlaceholderWindowHandle {
 ///
 /// Creates a frameless webview popup containing the tray panel HTML.
 /// On Windows, this appears as a popup near the system tray.
+/// Supports show/hide toggling via left-click on the tray icon.
 pub struct TrayPanelWebview {
     config: WebviewConfig,
+    visible: bool,
+    #[cfg(all(feature = "webview", target_os = "windows"))]
+    hwnd: Option<isize>,
+    // Hold the webview and window handle to keep them alive.
+    #[cfg(feature = "webview")]
+    _webview: Option<wry::WebView>,
+    #[cfg(feature = "webview")]
+    _handle: Option<PlaceholderWindowHandle>,
 }
 
 impl TrayPanelWebview {
     /// Create a new tray panel webview with the given configuration.
     pub fn new(config: WebviewConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            visible: false,
+            #[cfg(all(feature = "webview", target_os = "windows"))]
+            hwnd: None,
+            #[cfg(feature = "webview")]
+            _webview: None,
+            #[cfg(feature = "webview")]
+            _handle: None,
+        }
     }
 
     /// Get the webview configuration.
@@ -258,46 +276,119 @@ impl TrayPanelWebview {
         &self.config
     }
 
-    /// Show the webview panel.
-    ///
-    /// On platforms with the `webview` feature, creates a wry webview
-    /// with the tray panel HTML. The webview is frameless and positioned
-    /// near the system tray.
+    /// Returns `true` if the panel is currently visible.
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// Initialize the webview (create the window and load HTML) without
+    /// showing it. Call this once during startup. Subsequent calls are no-ops.
     #[cfg(feature = "webview")]
-    pub fn show(&self) -> Result<(), EngramError> {
+    pub fn init(&mut self, api_port: u16) -> Result<(), EngramError> {
+        if self._webview.is_some() {
+            return Ok(()); // already initialized
+        }
+
         use wry::WebViewBuilder;
 
-        tracing::info!(
-            width = self.config.width,
-            height = self.config.height,
-            "Opening tray panel webview"
-        );
-
-        let html = crate::tray_panel::TRAY_PANEL_HTML;
-
-        // Build a webview with the tray panel HTML.
-        // In a real app, this would be integrated with the platform's
-        // event loop (winit, tao, or raw Win32 message pump) and use
-        // a real parent HWND. This placeholder allows compilation and
-        // testing of the webview pipeline without a live window.
         let handle =
             PlaceholderWindowHandle::create_hidden_window(self.config.width, self.config.height)?;
-        let _webview = WebViewBuilder::new()
-            .with_html(html)
-            .build_as_child(&handle)
+
+        // Inject the API port into the HTML so fetch calls target the right address.
+        let html = crate::tray_panel::TRAY_PANEL_HTML
+            .replace("http://localhost:3030", &format!("http://127.0.0.1:{}", api_port));
+
+        let webview = WebViewBuilder::new()
+            .with_html(&html)
+            .build(&handle)
             .map_err(|e| EngramError::Config(format!("Failed to create webview: {}", e)))?;
 
-        tracing::info!("Tray panel webview shown");
+        #[cfg(target_os = "windows")]
+        {
+            self.hwnd = Some(handle.hwnd);
+        }
+
+        self._webview = Some(webview);
+        self._handle = Some(handle);
+
+        tracing::info!("Tray panel webview initialized (hidden)");
         Ok(())
     }
 
-    /// Stub show when webview feature is disabled.
+    /// Stub init when webview feature is disabled.
     #[cfg(not(feature = "webview"))]
-    pub fn show(&self) -> Result<(), EngramError> {
-        tracing::warn!("Webview requires the `webview` feature to be enabled");
-        Err(EngramError::Config(
-            "Tray panel webview requires the `webview` feature".into(),
-        ))
+    pub fn init(&mut self, _api_port: u16) -> Result<(), EngramError> {
+        Ok(())
+    }
+
+    /// Show the webview panel near the tray icon.
+    #[cfg(all(feature = "webview", target_os = "windows"))]
+    pub fn show(&mut self, tray_x: f64, tray_y: f64) -> Result<(), EngramError> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+        let hwnd = self.hwnd.ok_or_else(|| {
+            EngramError::Config("Webview not initialized — call init() first".into())
+        })?;
+
+        // Position above the tray icon (bottom taskbar assumed).
+        let x = tray_x as i32 - self.config.width as i32 / 2;
+        let y = tray_y as i32 - self.config.height as i32;
+
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                x,
+                y,
+                self.config.width as i32,
+                self.config.height as i32,
+                SWP_SHOWWINDOW,
+            );
+            ShowWindow(hwnd, SW_SHOW);
+            SetForegroundWindow(hwnd);
+        }
+
+        self.visible = true;
+        tracing::debug!("Tray panel shown at ({}, {})", x, y);
+        Ok(())
+    }
+
+    /// Stub show for non-Windows or without webview feature.
+    #[cfg(not(all(feature = "webview", target_os = "windows")))]
+    pub fn show(&mut self, _tray_x: f64, _tray_y: f64) -> Result<(), EngramError> {
+        self.visible = true;
+        Ok(())
+    }
+
+    /// Hide the webview panel.
+    #[cfg(all(feature = "webview", target_os = "windows"))]
+    pub fn hide(&mut self) -> Result<(), EngramError> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+
+        if let Some(hwnd) = self.hwnd {
+            unsafe {
+                ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+        self.visible = false;
+        tracing::debug!("Tray panel hidden");
+        Ok(())
+    }
+
+    /// Stub hide.
+    #[cfg(not(all(feature = "webview", target_os = "windows")))]
+    pub fn hide(&mut self) -> Result<(), EngramError> {
+        self.visible = false;
+        Ok(())
+    }
+
+    /// Toggle the webview panel visibility.
+    pub fn toggle(&mut self, tray_x: f64, tray_y: f64) -> Result<(), EngramError> {
+        if self.visible {
+            self.hide()
+        } else {
+            self.show(tray_x, tray_y)
+        }
     }
 }
 
@@ -349,11 +440,17 @@ mod tests {
 
     #[cfg(not(feature = "webview"))]
     #[test]
-    fn test_tray_panel_webview_stub_errors() {
-        let panel = TrayPanelWebview::new(WebviewConfig::default());
-        let result = panel.show();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("webview"));
+    fn test_tray_panel_webview_stub_toggle() {
+        let mut panel = TrayPanelWebview::new(WebviewConfig::default());
+        assert!(!panel.is_visible());
+        panel.show(100.0, 200.0).unwrap();
+        assert!(panel.is_visible());
+        panel.hide().unwrap();
+        assert!(!panel.is_visible());
+        panel.toggle(100.0, 200.0).unwrap();
+        assert!(panel.is_visible());
+        panel.toggle(100.0, 200.0).unwrap();
+        assert!(!panel.is_visible());
     }
 
     // -----------------------------------------------------------------------
@@ -380,14 +477,14 @@ mod tests {
         let config = WebviewConfig::default();
         let (x, y) = config.panel_position(500, 0, TaskbarEdge::Top);
         assert_eq!(x, 500 - 200);
-        assert_eq!(y, 0 + 32);
+        assert_eq!(y, 32);
     }
 
     #[test]
     fn test_panel_position_left() {
         let config = WebviewConfig::default();
         let (x, y) = config.panel_position(0, 500, TaskbarEdge::Left);
-        assert_eq!(x, 0 + 32);
+        assert_eq!(x, 32);
         assert_eq!(y, 500 - 250);
     }
 

@@ -50,11 +50,35 @@ pub enum TrayMenuAction {
     Quit,
 }
 
+/// Events emitted by the tray event loop.
+#[derive(Debug, Clone)]
+pub enum TrayEvent {
+    /// A context menu item was clicked.
+    Menu(TrayMenuAction),
+    /// The tray icon was left-clicked. Coordinates are the icon position.
+    IconClick { x: f64, y: f64 },
+    /// The tray icon was double-clicked (Windows only).
+    IconDoubleClick,
+}
+
 /// Manages the system tray icon and its context menu.
 pub struct TrayService {
     state: TrayState,
     #[cfg(target_os = "windows")]
     _tray: Option<tray_icon::TrayIcon>,
+    #[cfg(target_os = "windows")]
+    menu_ids: MenuIds,
+}
+
+/// Stored menu item IDs for matching events.
+#[cfg(target_os = "windows")]
+#[derive(Clone)]
+struct MenuIds {
+    search: tray_icon::menu::MenuId,
+    toggle_dictation: tray_icon::menu::MenuId,
+    dashboard: tray_icon::menu::MenuId,
+    settings: tray_icon::menu::MenuId,
+    quit: tray_icon::menu::MenuId,
 }
 
 impl TrayService {
@@ -72,13 +96,27 @@ impl TrayService {
         let icon = Icon::from_rgba(icon_data, 16, 16)
             .map_err(|e| EngramError::Config(format!("Failed to create tray icon: {}", e)))?;
 
-        // Build context menu.
+        // Build context menu, storing IDs for event matching.
         let menu = Menu::new();
-        let _ = menu.append(&MenuItem::new("Search", true, None));
-        let _ = menu.append(&MenuItem::new("Toggle Dictation", true, None));
-        let _ = menu.append(&MenuItem::new("Dashboard", true, None));
-        let _ = menu.append(&MenuItem::new("Settings", true, None));
-        let _ = menu.append(&MenuItem::new("Quit", true, None));
+        let mi_search = MenuItem::new("Search", true, None);
+        let mi_dictation = MenuItem::new("Toggle Dictation", true, None);
+        let mi_dashboard = MenuItem::new("Dashboard", true, None);
+        let mi_settings = MenuItem::new("Settings", true, None);
+        let mi_quit = MenuItem::new("Quit", true, None);
+
+        let ids = MenuIds {
+            search: mi_search.id().clone(),
+            toggle_dictation: mi_dictation.id().clone(),
+            dashboard: mi_dashboard.id().clone(),
+            settings: mi_settings.id().clone(),
+            quit: mi_quit.id().clone(),
+        };
+
+        let _ = menu.append(&mi_search);
+        let _ = menu.append(&mi_dictation);
+        let _ = menu.append(&mi_dashboard);
+        let _ = menu.append(&mi_settings);
+        let _ = menu.append(&mi_quit);
 
         let tray = TrayIconBuilder::new()
             .with_tooltip("Engram - Idle")
@@ -92,6 +130,7 @@ impl TrayService {
         Ok(Self {
             state: TrayState::Idle,
             _tray: Some(tray),
+            menu_ids: ids,
         })
     }
 
@@ -152,18 +191,19 @@ impl TrayService {
         use tray_icon::menu::MenuEvent;
 
         if let Ok(event) = MenuEvent::receiver().try_recv() {
-            let id_str = event.id().0.as_str();
-            // Match menu items by their text (set during creation).
-            // tray-icon assigns auto-incrementing IDs; we match by checking the ID.
-            // In practice, you'd store the IDs from MenuItem creation.
-            // For now, use a simple index-based mapping.
-            match id_str {
-                s if s.contains("1001") => Some(TrayMenuAction::Search),
-                s if s.contains("1002") => Some(TrayMenuAction::ToggleDictation),
-                s if s.contains("1003") => Some(TrayMenuAction::OpenDashboard),
-                s if s.contains("1004") => Some(TrayMenuAction::Settings),
-                s if s.contains("1005") => Some(TrayMenuAction::Quit),
-                _ => None,
+            let id = event.id();
+            if *id == self.menu_ids.search {
+                Some(TrayMenuAction::Search)
+            } else if *id == self.menu_ids.toggle_dictation {
+                Some(TrayMenuAction::ToggleDictation)
+            } else if *id == self.menu_ids.dashboard {
+                Some(TrayMenuAction::OpenDashboard)
+            } else if *id == self.menu_ids.settings {
+                Some(TrayMenuAction::Settings)
+            } else if *id == self.menu_ids.quit {
+                Some(TrayMenuAction::Quit)
+            } else {
+                None
             }
         } else {
             None
@@ -180,6 +220,99 @@ impl TrayService {
     pub fn on_tray_click(&self, panel_state: &mut crate::webview::TrayPanelState) {
         panel_state.toggle();
     }
+
+    /// Run the tray event loop on the current thread.
+    ///
+    /// This pumps the Win32 message queue (required for tray-icon events on
+    /// Windows) and dispatches both menu actions and icon click events.
+    /// The loop runs until the callback returns `false` (i.e. on Quit) or
+    /// `stop` is signalled.
+    ///
+    /// **Must be called on the same thread that created the `TrayService`.**
+    #[cfg(target_os = "windows")]
+    pub fn run_event_loop<F>(&self, stop: &std::sync::atomic::AtomicBool, mut on_event: F)
+    where
+        F: FnMut(TrayEvent) -> bool,
+    {
+        use std::sync::atomic::Ordering;
+        use tray_icon::TrayIconEvent;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
+        };
+
+        tracing::info!("Tray event loop started");
+
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+
+            // Pump all pending Win32 messages — this is what makes tray-icon
+            // events (right-click menu, left-click) actually fire.
+            unsafe {
+                let mut msg: MSG = std::mem::zeroed();
+                while PeekMessageW(&mut msg, 0, 0, 0, PM_REMOVE) != 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+
+            // Check for tray icon click events (left-click, double-click).
+            if let Ok(event) = TrayIconEvent::receiver().try_recv() {
+                match event {
+                    TrayIconEvent::Click {
+                        button: tray_icon::MouseButton::Left,
+                        button_state: tray_icon::MouseButtonState::Up,
+                        rect,
+                        ..
+                    } => {
+                        let te = TrayEvent::IconClick {
+                            x: rect.position.x,
+                            y: rect.position.y,
+                        };
+                        if !on_event(te) {
+                            break;
+                        }
+                    }
+                    TrayIconEvent::DoubleClick {
+                        button: tray_icon::MouseButton::Left,
+                        ..
+                    } => {
+                        // Treat double-click same as single click.
+                        if !on_event(TrayEvent::IconDoubleClick) {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Check for menu events dispatched by tray-icon.
+            if let Some(action) = self.poll_menu_event() {
+                tracing::info!(action = ?action, "Tray menu action");
+                if !on_event(TrayEvent::Menu(action)) {
+                    break;
+                }
+            }
+
+            // Sleep briefly to avoid busy-waiting (~60 Hz).
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+
+        tracing::info!("Tray event loop stopped");
+    }
+
+    /// Stub event loop for non-Windows — blocks until stop is signalled.
+    #[cfg(not(target_os = "windows"))]
+    pub fn run_event_loop<F>(&self, stop: &std::sync::atomic::AtomicBool, _on_event: F)
+    where
+        F: FnMut(TrayEvent) -> bool,
+    {
+        use std::sync::atomic::Ordering;
+        while !stop.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
 }
 
 impl Default for TrayService {
@@ -188,6 +321,17 @@ impl Default for TrayService {
             state: TrayState::Idle,
             #[cfg(target_os = "windows")]
             _tray: None,
+            #[cfg(target_os = "windows")]
+            menu_ids: {
+                use tray_icon::menu::MenuId;
+                MenuIds {
+                    search: MenuId::new("_"),
+                    toggle_dictation: MenuId::new("_"),
+                    dashboard: MenuId::new("_"),
+                    settings: MenuId::new("_"),
+                    quit: MenuId::new("_"),
+                }
+            },
         })
     }
 }

@@ -29,6 +29,39 @@ pub struct EngramConfig {
     pub safety: SafetyConfig,
     #[serde(default)]
     pub insight: InsightConfig,
+    #[serde(default)]
+    pub actions: ActionsConfig,
+}
+
+/// Action engine configuration (loaded from `[actions]` in config.toml).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ActionsConfig {
+    /// Whether the action engine is enabled.
+    pub enabled: bool,
+    /// Minimum confidence to create a task from an intent.
+    pub min_confidence: f32,
+    /// Confidence threshold for auto-execution without confirmation.
+    pub auto_execute_threshold: f32,
+    /// Days before a task expires.
+    pub task_ttl_days: u32,
+    /// Seconds before a confirmation request times out.
+    pub confirmation_timeout_seconds: u64,
+    /// Maximum notifications per minute.
+    pub max_notifications_per_minute: u32,
+}
+
+impl Default for ActionsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_confidence: 0.6,
+            auto_execute_threshold: 0.9,
+            task_ttl_days: 7,
+            confirmation_timeout_seconds: 300,
+            max_notifications_per_minute: 10,
+        }
+    }
 }
 
 // Default is derived via #[derive(Default)] on each sub-config's #[serde(default)].

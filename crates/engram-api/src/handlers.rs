@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse};
 use axum::Json;
@@ -1244,6 +1245,7 @@ pub async fn ingest(
         .window_title
         .unwrap_or_else(|| "API Ingest".to_string());
 
+    let ingest_text = body.text.clone();
     let frame = engram_core::types::ScreenFrame {
         id: Uuid::new_v4(),
         content_type: engram_core::types::ContentType::Screen,
@@ -1268,7 +1270,8 @@ pub async fn ingest(
                 frame_id: id,
                 app_name: engram_core::types::AppName("api".to_string()),
                 window_title: engram_core::types::WindowTitle::new("API Ingest".to_string()),
-                text_length: 0,
+                text_length: ingest_text.len(),
+                text: Some(ingest_text.clone()),
                 timestamp: engram_core::types::Timestamp::now(),
             });
             (true, Some(id), "Stored".to_string())
@@ -1281,7 +1284,8 @@ pub async fn ingest(
                 frame_id: id,
                 app_name: engram_core::types::AppName("api".to_string()),
                 window_title: engram_core::types::WindowTitle::new("API Ingest".to_string()),
-                text_length: 0,
+                text_length: ingest_text.len(),
+                text: Some(ingest_text.clone()),
                 timestamp: engram_core::types::Timestamp::now(),
             });
             (
@@ -1610,6 +1614,350 @@ pub async fn trigger_export(
         "files_exported": file_count,
         "vault_path": export_cfg.vault_path
     })))
+}
+
+// =============================================================================
+// Action engine query/request/response types
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct TaskListParams {
+    pub status: Option<String>,
+    pub action_type: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ActionHistoryParams {
+    pub action_type: Option<String>,
+    pub since: Option<String>,
+    pub limit: Option<u64>,
+    pub result: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IntentListParams {
+    #[serde(rename = "type")]
+    pub intent_type: Option<String>,
+    pub min_confidence: Option<f64>,
+    pub limit: Option<u64>,
+    pub since: Option<String>,
+    pub acted_on: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTaskRequest {
+    pub title: String,
+    pub action_type: String,
+    pub action_payload: Option<String>,
+    pub scheduled_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateTaskRequest {
+    pub status: Option<String>,
+    #[allow(dead_code)]
+    pub scheduled_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TaskResponse {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub action_type: String,
+    pub action_payload: String,
+    pub intent_id: Option<String>,
+    pub source_chunk_id: Option<String>,
+    pub scheduled_at: Option<i64>,
+    pub completed_at: Option<i64>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TaskListResponse {
+    pub tasks: Vec<TaskResponse>,
+    pub total: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ActionHistoryResponse {
+    pub records: Vec<serde_json::Value>,
+    pub total: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IntentListResponse {
+    pub intents: Vec<serde_json::Value>,
+    pub total: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ActionResultResponse {
+    pub success: bool,
+    pub task_id: String,
+    pub status: String,
+    pub message: String,
+}
+
+fn task_to_response(task: &engram_action::Task) -> TaskResponse {
+    TaskResponse {
+        id: task.id.to_string(),
+        title: task.title.clone(),
+        status: task.status.to_string(),
+        action_type: task.action_type.to_string(),
+        action_payload: task.action_payload.clone(),
+        intent_id: task.intent_id.map(|id| id.to_string()),
+        source_chunk_id: task.source_chunk_id.map(|id| id.to_string()),
+        scheduled_at: task.scheduled_at.map(|t| t.0),
+        completed_at: task.completed_at.map(|t| t.0),
+        created_at: task.created_at.0,
+    }
+}
+
+// =============================================================================
+// Action engine handlers
+// =============================================================================
+
+/// GET /tasks - list tasks with optional filters.
+pub async fn list_tasks(
+    State(state): State<AppState>,
+    Query(params): Query<TaskListParams>,
+) -> Result<Json<TaskListResponse>, ApiError> {
+    if !state.action_config.enabled {
+        return Err(ApiError::Forbidden("Action engine is disabled".to_string()));
+    }
+    let status = params
+        .status
+        .as_deref()
+        .and_then(|s| s.parse::<engram_action::TaskStatus>().ok());
+    let action_type = params
+        .action_type
+        .as_deref()
+        .and_then(|s| s.parse::<engram_action::ActionType>().ok());
+    let tasks = state.task_store.list(status, action_type, params.limit);
+    let total = tasks.len();
+    let responses: Vec<TaskResponse> = tasks.iter().map(task_to_response).collect();
+    Ok(Json(TaskListResponse {
+        tasks: responses,
+        total,
+    }))
+}
+
+/// GET /tasks/:id - get a single task.
+pub async fn get_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<TaskResponse>, ApiError> {
+    let uuid = id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| ApiError::BadRequest("Invalid task ID".to_string()))?;
+    let task = state
+        .task_store
+        .get(uuid)
+        .map_err(|_| ApiError::NotFound(format!("Task {} not found", id)))?;
+    Ok(Json(task_to_response(&task)))
+}
+
+/// POST /tasks - create a manual task.
+pub async fn create_task(
+    State(state): State<AppState>,
+    Json(body): Json<CreateTaskRequest>,
+) -> Result<(StatusCode, Json<TaskResponse>), ApiError> {
+    if !state.action_config.enabled {
+        return Err(ApiError::Forbidden("Action engine is disabled".to_string()));
+    }
+    let action_type = body
+        .action_type
+        .parse::<engram_action::ActionType>()
+        .map_err(|_| ApiError::BadRequest(format!("Invalid action_type: {}", body.action_type)))?;
+    let scheduled_at = body.scheduled_at.map(engram_core::types::Timestamp);
+    let task = state
+        .task_store
+        .create(
+            body.title,
+            action_type,
+            body.action_payload.unwrap_or_else(|| "{}".to_string()),
+            None,
+            None,
+            scheduled_at,
+        )
+        .map_err(|e| ApiError::Internal(format!("Failed to create task: {}", e)))?;
+    Ok((StatusCode::CREATED, Json(task_to_response(&task))))
+}
+
+/// PUT /tasks/:id - update task status.
+pub async fn update_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateTaskRequest>,
+) -> Result<Json<TaskResponse>, ApiError> {
+    let uuid = id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| ApiError::BadRequest("Invalid task ID".to_string()))?;
+    if let Some(ref status_str) = body.status {
+        let new_status = status_str
+            .parse::<engram_action::TaskStatus>()
+            .map_err(|_| ApiError::BadRequest(format!("Invalid status: {}", status_str)))?;
+        let updated = state
+            .task_store
+            .update_status(uuid, new_status)
+            .map_err(|e| match e {
+                engram_action::TaskError::NotFound(_) => {
+                    ApiError::NotFound(format!("Task {} not found", id))
+                }
+                engram_action::TaskError::InvalidTransition(_, _) => {
+                    ApiError::BadRequest(format!("Invalid state transition: {}", e))
+                }
+                _ => ApiError::Internal(format!("Failed to update task: {}", e)),
+            })?;
+        Ok(Json(task_to_response(&updated)))
+    } else {
+        let task = state
+            .task_store
+            .get(uuid)
+            .map_err(|_| ApiError::NotFound(format!("Task {} not found", id)))?;
+        Ok(Json(task_to_response(&task)))
+    }
+}
+
+/// DELETE /tasks/:id - hard-delete a task from the store.
+pub async fn delete_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<TaskResponse>, ApiError> {
+    let uuid = id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| ApiError::BadRequest("Invalid task ID".to_string()))?;
+    let removed = state.task_store.remove(uuid).map_err(|e| match e {
+        engram_action::TaskError::NotFound(_) => {
+            ApiError::NotFound(format!("Task {} not found", id))
+        }
+        _ => ApiError::Internal(format!("Failed to delete task: {}", e)),
+    })?;
+    Ok(Json(task_to_response(&removed)))
+}
+
+/// GET /actions/history - action execution history.
+pub async fn get_action_history(
+    State(state): State<AppState>,
+    Query(params): Query<ActionHistoryParams>,
+) -> Result<Json<ActionHistoryResponse>, ApiError> {
+    let records = state
+        .query_service
+        .get_action_history(
+            params.action_type.as_deref(),
+            params.since.as_deref(),
+            params.limit,
+        )
+        .unwrap_or_default();
+    let total = records.len();
+    Ok(Json(ActionHistoryResponse { records, total }))
+}
+
+/// GET /intents - list detected intents.
+pub async fn list_intents(
+    State(state): State<AppState>,
+    Query(params): Query<IntentListParams>,
+) -> Result<Json<IntentListResponse>, ApiError> {
+    let intents = state
+        .query_service
+        .get_intents_json(
+            params.intent_type.as_deref(),
+            params.min_confidence,
+            params.limit,
+            params.since.as_deref(),
+            params.acted_on,
+        )
+        .unwrap_or_default();
+    let total = intents.len();
+    Ok(Json(IntentListResponse { intents, total }))
+}
+
+/// POST /actions/:task_id/approve - approve a pending action.
+pub async fn approve_action(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Json<ActionResultResponse>, ApiError> {
+    let uuid = task_id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| ApiError::BadRequest("Invalid task ID".to_string()))?;
+
+    // Try to approve in confirmation gate
+    let _confirmed = state.confirmation_gate.approve(uuid).ok_or_else(|| {
+        ApiError::NotFound(format!("No pending confirmation for task {}", task_id))
+    })?;
+
+    // Move task to Active and execute
+    let _ = state
+        .task_store
+        .update_status(uuid, engram_action::TaskStatus::Active)
+        .map_err(|e| ApiError::BadRequest(format!("Cannot activate task: {}", e)))?;
+
+    // Emit ConfirmationReceived event
+    state.publish_event(engram_core::events::DomainEvent::ConfirmationReceived {
+        task_id: uuid,
+        approved: true,
+        timestamp: engram_core::types::Timestamp::now(),
+    });
+
+    // Execute via orchestrator
+    let exec_result = state.orchestrator.execute_task(uuid).await;
+
+    let status = match exec_result {
+        Ok(()) => state
+            .task_store
+            .get(uuid)
+            .map(|t| t.status.to_string())
+            .unwrap_or_else(|_| "unknown".to_string()),
+        Err(_) => "failed".to_string(),
+    };
+
+    Ok(Json(ActionResultResponse {
+        success: exec_result.is_ok(),
+        task_id: task_id.clone(),
+        status,
+        message: if exec_result.is_ok() {
+            "Action approved and executed".to_string()
+        } else {
+            "Action approved but execution failed".to_string()
+        },
+    }))
+}
+
+/// POST /actions/:task_id/dismiss - dismiss a pending action.
+pub async fn dismiss_action(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Json<ActionResultResponse>, ApiError> {
+    let uuid = task_id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| ApiError::BadRequest("Invalid task ID".to_string()))?;
+
+    // Dismiss from confirmation gate
+    state.confirmation_gate.dismiss(uuid);
+
+    // Dismiss the task
+    let dismissed = state.task_store.dismiss(uuid).map_err(|e| match e {
+        engram_action::TaskError::NotFound(_) => {
+            ApiError::NotFound(format!("Task {} not found", task_id))
+        }
+        _ => ApiError::BadRequest(format!("Cannot dismiss task: {}", e)),
+    })?;
+
+    // Emit ConfirmationReceived event
+    state.publish_event(engram_core::events::DomainEvent::ConfirmationReceived {
+        task_id: uuid,
+        approved: false,
+        timestamp: engram_core::types::Timestamp::now(),
+    });
+
+    Ok(Json(ActionResultResponse {
+        success: true,
+        task_id: task_id.clone(),
+        status: dismissed.status.to_string(),
+        message: "Action dismissed".to_string(),
+    }))
 }
 
 #[cfg(test)]
@@ -2351,7 +2699,7 @@ mod tests {
         let long_q = "a".repeat(1001);
         let resp = app
             .oneshot(
-                Request::get(&format!("/search/semantic?q={}", long_q))
+                Request::get(format!("/search/semantic?q={}", long_q))
                     .header("authorization", format!("Bearer {}", TEST_TOKEN))
                     .body(Body::empty())
                     .unwrap(),
@@ -2804,5 +3152,969 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "export_triggered");
+    }
+
+    // =========================================================================
+    // Action Engine API Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_list_tasks_empty() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/tasks")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let list: TaskListResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(list.tasks.len(), 0);
+        assert_eq!(list.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_create_task() {
+        let app = make_app();
+        let body = serde_json::json!({
+            "title": "Test reminder",
+            "action_type": "reminder",
+            "action_payload": "{\"message\":\"hello\"}"
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/tasks")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let task: TaskResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(task.title, "Test reminder");
+        assert_eq!(task.action_type, "reminder");
+        assert_eq!(task.status, "detected");
+    }
+
+    #[tokio::test]
+    async fn test_create_task_invalid_action_type() {
+        let app = make_app();
+        let body = serde_json::json!({
+            "title": "Bad task",
+            "action_type": "invalid_type"
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/tasks")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_and_get_task() {
+        let state = make_state();
+        let task = state
+            .task_store
+            .create(
+                "Get me".to_string(),
+                engram_action::ActionType::Clipboard,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get(&format!("/tasks/{}", task.id))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let found: TaskResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(found.title, "Get me");
+        assert_eq!(found.id, task.id.to_string());
+    }
+
+    #[tokio::test]
+    async fn test_get_task_not_found() {
+        let app = make_app();
+        let fake_id = Uuid::new_v4();
+        let resp = app
+            .oneshot(
+                Request::get(&format!("/tasks/{}", fake_id))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_get_task_invalid_uuid() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/tasks/not-a-uuid")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_update_task_status() {
+        let state = make_state();
+        let task = state
+            .task_store
+            .create(
+                "Update me".to_string(),
+                engram_action::ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let app = crate::create_router(state);
+        let body = serde_json::json!({"status": "pending"});
+        let resp = app
+            .oneshot(
+                Request::put(&format!("/tasks/{}", task.id))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let updated: TaskResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(updated.status, "pending");
+    }
+
+    #[tokio::test]
+    async fn test_update_task_invalid_transition() {
+        let state = make_state();
+        let task = state
+            .task_store
+            .create(
+                "Bad transition".to_string(),
+                engram_action::ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let app = crate::create_router(state);
+        // Detected -> Done is invalid
+        let body = serde_json::json!({"status": "done"});
+        let resp = app
+            .oneshot(
+                Request::put(&format!("/tasks/{}", task.id))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_update_task_invalid_status_string() {
+        let state = make_state();
+        let task = state
+            .task_store
+            .create(
+                "Bad status".to_string(),
+                engram_action::ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let app = crate::create_router(state);
+        let body = serde_json::json!({"status": "invalid_status"});
+        let resp = app
+            .oneshot(
+                Request::put(&format!("/tasks/{}", task.id))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_delete_task_hard_delete() {
+        let state = make_state();
+        let task = state
+            .task_store
+            .create(
+                "Delete me".to_string(),
+                engram_action::ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        // Move to Active to prove hard-delete works from any state
+        state
+            .task_store
+            .update_status(task.id, engram_action::TaskStatus::Pending)
+            .unwrap();
+        state
+            .task_store
+            .update_status(task.id, engram_action::TaskStatus::Active)
+            .unwrap();
+
+        let app = crate::create_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::delete(&format!("/tasks/{}", task.id))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let deleted: TaskResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(deleted.status, "active"); // Returns the task as it was before removal
+
+        // Verify task is gone
+        assert!(state.task_store.get(task.id).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_delete_task_not_found() {
+        let app = make_app();
+        let fake_id = Uuid::new_v4();
+        let resp = app
+            .oneshot(
+                Request::delete(&format!("/tasks/{}", fake_id))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_with_filter() {
+        let state = make_state();
+        let t1 = state
+            .task_store
+            .create(
+                "T1".to_string(),
+                engram_action::ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        state
+            .task_store
+            .create(
+                "T2".to_string(),
+                engram_action::ActionType::Clipboard,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        state
+            .task_store
+            .update_status(t1.id, engram_action::TaskStatus::Pending)
+            .unwrap();
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/tasks?status=pending")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let list: TaskListResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(list.total, 1);
+        assert_eq!(list.tasks[0].title, "T1");
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_filter_by_action_type() {
+        let state = make_state();
+        state
+            .task_store
+            .create(
+                "Reminder".to_string(),
+                engram_action::ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        state
+            .task_store
+            .create(
+                "Clipboard".to_string(),
+                engram_action::ActionType::Clipboard,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/tasks?action_type=clipboard")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let list: TaskListResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(list.total, 1);
+        assert_eq!(list.tasks[0].title, "Clipboard");
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_with_limit() {
+        let state = make_state();
+        for i in 0..5 {
+            state
+                .task_store
+                .create(
+                    format!("T{}", i),
+                    engram_action::ActionType::Reminder,
+                    "{}".to_string(),
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+        }
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/tasks?limit=2")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let list: TaskListResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(list.total, 2);
+    }
+
+    #[tokio::test]
+    async fn test_create_task_with_scheduled_at() {
+        let app = make_app();
+        let body = serde_json::json!({
+            "title": "Scheduled task",
+            "action_type": "reminder",
+            "scheduled_at": 1700000000
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/tasks")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let task: TaskResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(task.scheduled_at, Some(1700000000));
+    }
+
+    #[tokio::test]
+    async fn test_create_task_default_payload() {
+        let app = make_app();
+        let body = serde_json::json!({
+            "title": "No payload",
+            "action_type": "clipboard"
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/tasks")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let task: TaskResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(task.action_payload, "{}");
+    }
+
+    #[tokio::test]
+    async fn test_action_history_empty() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/actions/history")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let hist: ActionHistoryResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(hist.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_intents_empty() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::get("/intents")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let intents: IntentListResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(intents.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_approve_action_no_pending() {
+        let app = make_app();
+        let fake_id = Uuid::new_v4();
+        let resp = app
+            .oneshot(
+                Request::post(&format!("/actions/{}/approve", fake_id))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_action_no_task() {
+        let app = make_app();
+        let fake_id = Uuid::new_v4();
+        let resp = app
+            .oneshot(
+                Request::post(&format!("/actions/{}/dismiss", fake_id))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_approve_action_invalid_uuid() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/actions/not-a-uuid/approve")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_action_invalid_uuid() {
+        let app = make_app();
+        let resp = app
+            .oneshot(
+                Request::post("/actions/not-a-uuid/dismiss")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_dismiss_action_with_confirmation() {
+        let state = make_state();
+        let task = state
+            .task_store
+            .create(
+                "Confirm dismiss".to_string(),
+                engram_action::ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        // Move to Pending (required for dismiss)
+        state
+            .task_store
+            .update_status(task.id, engram_action::TaskStatus::Pending)
+            .unwrap();
+        // Add to confirmation gate
+        state.confirmation_gate.request_confirmation(
+            task.id,
+            engram_action::ActionType::Reminder,
+            "Test reminder".to_string(),
+        );
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::post(&format!("/actions/{}/dismiss", task.id))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let result: ActionResultResponse = serde_json::from_slice(&body).unwrap();
+        assert!(result.success);
+        assert_eq!(result.status, "dismissed");
+        assert_eq!(result.message, "Action dismissed");
+    }
+
+    #[tokio::test]
+    async fn test_task_to_response_helper() {
+        let task = engram_action::Task {
+            id: Uuid::new_v4(),
+            title: "Test".to_string(),
+            status: engram_action::TaskStatus::Pending,
+            intent_id: Some(Uuid::new_v4()),
+            action_type: engram_action::ActionType::Reminder,
+            action_payload: r#"{"msg":"hi"}"#.to_string(),
+            scheduled_at: Some(engram_core::types::Timestamp(1700000000)),
+            completed_at: None,
+            created_at: engram_core::types::Timestamp(1699999000),
+            source_chunk_id: Some(Uuid::new_v4()),
+        };
+        let resp = task_to_response(&task);
+        assert_eq!(resp.id, task.id.to_string());
+        assert_eq!(resp.title, "Test");
+        assert_eq!(resp.status, "pending");
+        assert_eq!(resp.action_type, "reminder");
+        assert_eq!(resp.scheduled_at, Some(1700000000));
+        assert!(resp.intent_id.is_some());
+        assert!(resp.source_chunk_id.is_some());
+        assert!(resp.completed_at.is_none());
+        assert_eq!(resp.created_at, 1699999000);
+    }
+
+    #[tokio::test]
+    async fn test_task_to_response_none_fields() {
+        let task = engram_action::Task {
+            id: Uuid::new_v4(),
+            title: "Minimal".to_string(),
+            status: engram_action::TaskStatus::Detected,
+            intent_id: None,
+            action_type: engram_action::ActionType::QuickNote,
+            action_payload: "{}".to_string(),
+            scheduled_at: None,
+            completed_at: None,
+            created_at: engram_core::types::Timestamp::now(),
+            source_chunk_id: None,
+        };
+        let resp = task_to_response(&task);
+        assert!(resp.intent_id.is_none());
+        assert!(resp.source_chunk_id.is_none());
+        assert!(resp.scheduled_at.is_none());
+        assert!(resp.completed_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_create_task_all_action_types() {
+        for action_type in [
+            "reminder",
+            "clipboard",
+            "notification",
+            "url_open",
+            "quick_note",
+            "shell_command",
+        ] {
+            let app = make_app();
+            let body = serde_json::json!({
+                "title": format!("Test {}", action_type),
+                "action_type": action_type,
+            });
+            let resp = app
+                .oneshot(
+                    Request::post("/tasks")
+                        .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_string(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(
+                resp.status(),
+                StatusCode::CREATED,
+                "Failed for action_type: {}",
+                action_type
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_full_task_lifecycle() {
+        let state = make_state();
+        // Create
+        let task = state
+            .task_store
+            .create(
+                "Lifecycle test".to_string(),
+                engram_action::ActionType::Notification,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(task.status, engram_action::TaskStatus::Detected);
+
+        // Detected -> Pending
+        let pending = state
+            .task_store
+            .update_status(task.id, engram_action::TaskStatus::Pending)
+            .unwrap();
+        assert_eq!(pending.status, engram_action::TaskStatus::Pending);
+
+        // Pending -> Active
+        let active = state
+            .task_store
+            .update_status(task.id, engram_action::TaskStatus::Active)
+            .unwrap();
+        assert_eq!(active.status, engram_action::TaskStatus::Active);
+
+        // Active -> Done
+        let done = state
+            .task_store
+            .update_status(task.id, engram_action::TaskStatus::Done)
+            .unwrap();
+        assert_eq!(done.status, engram_action::TaskStatus::Done);
+        assert!(done.completed_at.is_some());
+
+        // Verify via GET
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get(&format!("/tasks/{}", task.id))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let found: TaskResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(found.status, "done");
+        assert!(found.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_kill_switch_blocks_list() {
+        let state = make_state();
+        // Override the action config to disabled
+        let disabled_config = engram_action::ActionConfig {
+            enabled: false,
+            ..engram_action::ActionConfig::default()
+        };
+        let ts = state.task_store.clone();
+        let cg = state.confirmation_gate.clone();
+        let orch = state.orchestrator.clone();
+        let state = state.with_action_engine(ts, cg, orch, disabled_config);
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/tasks")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_kill_switch_blocks_create() {
+        let state = make_state();
+        let disabled_config = engram_action::ActionConfig {
+            enabled: false,
+            ..engram_action::ActionConfig::default()
+        };
+        let ts = state.task_store.clone();
+        let cg = state.confirmation_gate.clone();
+        let orch = state.orchestrator.clone();
+        let state = state.with_action_engine(ts, cg, orch, disabled_config);
+
+        let app = crate::create_router(state);
+        let body = serde_json::json!({
+            "title": "Should fail",
+            "action_type": "reminder"
+        });
+        let resp = app
+            .oneshot(
+                Request::post("/tasks")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_action_history_with_data() {
+        let state = make_state();
+        // Insert action history directly into the database
+        state
+            .database
+            .with_conn(|conn| {
+                // Create a task first (for FK constraint)
+                conn.execute(
+                    "INSERT INTO tasks (id, title, status, action_type, action_payload, created_at)
+                     VALUES ('task-hist-1', 'Test', 'active', 'reminder', '{}', '2026-02-18T10:00:00')",
+                    [],
+                )
+                .map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+                conn.execute(
+                    "INSERT INTO action_history (id, task_id, action_type, result, error_message, executed_at)
+                     VALUES ('ah-1', 'task-hist-1', 'reminder', 'success', NULL, '2026-02-18T10:05:00')",
+                    [],
+                )
+                .map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+                Ok(())
+            })
+            .unwrap();
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/actions/history")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let hist: ActionHistoryResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(hist.total, 1);
+        assert_eq!(hist.records[0]["action_type"], "reminder");
+        assert_eq!(hist.records[0]["result"], "success");
+    }
+
+    #[tokio::test]
+    async fn test_intents_with_data() {
+        let state = make_state();
+        state
+            .database
+            .with_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO intents (id, intent_type, raw_text, extracted_action, extracted_time, confidence, source_chunk_id, detected_at, acted_on)
+                     VALUES ('int-1', 'reminder', 'remind me', 'remind', '2026-02-18T15:00:00', 0.92, 'chunk-1', '2026-02-18T10:00:00', 0)",
+                    [],
+                )
+                .map_err(|e| engram_core::error::EngramError::Storage(e.to_string()))?;
+                Ok(())
+            })
+            .unwrap();
+
+        let app = crate::create_router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/intents")
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let intents: IntentListResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(intents.total, 1);
+        assert_eq!(intents.intents[0]["intent_type"], "reminder");
+    }
+
+    #[tokio::test]
+    async fn test_update_task_no_body_status() {
+        let state = make_state();
+        let task = state
+            .task_store
+            .create(
+                "No change".to_string(),
+                engram_action::ActionType::Reminder,
+                "{}".to_string(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let app = crate::create_router(state);
+        // Send update with no status field - should just return current task
+        let body = serde_json::json!({});
+        let resp = app
+            .oneshot(
+                Request::put(&format!("/tasks/{}", task.id))
+                    .header("authorization", format!("Bearer {}", TEST_TOKEN))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let task_resp: TaskResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(task_resp.status, "detected");
     }
 }

@@ -51,7 +51,7 @@ impl Database {
         };
 
         // Run migrations.
-        db.with_conn(|conn| migrations::run_migrations(conn))?;
+        db.with_conn(migrations::run_migrations)?;
 
         Ok(db)
     }
@@ -72,7 +72,7 @@ impl Database {
             conn: Mutex::new(conn),
         };
 
-        db.with_conn(|conn| migrations::run_migrations(conn))?;
+        db.with_conn(migrations::run_migrations)?;
 
         Ok(db)
     }

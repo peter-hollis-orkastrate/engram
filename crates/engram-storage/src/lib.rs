@@ -13,7 +13,10 @@ pub mod tier;
 
 pub use db::Database;
 pub use queries::{
-    AppSummary, CaptureRow, ClusterRow, DbStats, DigestRow, EntityRow, QueryService, SummaryRow,
+    get_action_history, get_intents, get_task, list_tasks, store_action_history, store_intent,
+    store_task, update_task_status, ActionHistoryRow, AppSummary, CaptureRow, ClusterRow, DbStats,
+    DigestRow, EntityRow, HistoryFilters, IntentFilters, IntentRow, QueryService, SummaryRow,
+    TaskFilters, TaskRow,
 };
 pub use repository::{
     AudioRepository, CaptureRepository, DictationRepository, VectorMetadata,

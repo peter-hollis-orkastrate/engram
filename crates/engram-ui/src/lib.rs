@@ -29,5 +29,5 @@ pub mod tray;
 pub mod tray_panel;
 pub mod webview;
 
-pub use tray::{TrayMenuAction, TrayService, TrayState};
+pub use tray::{TrayEvent, TrayMenuAction, TrayService, TrayState};
 pub use webview::{TaskbarEdge, TrayPanelState, TrayPanelWebview, WebviewConfig};

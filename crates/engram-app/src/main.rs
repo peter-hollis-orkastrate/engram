@@ -104,6 +104,8 @@ async fn audio_capture_loop(
     enabled: bool,
     chunk_secs: u64,
     audio_active: Arc<AtomicBool>,
+    whisper_model_path: String,
+    vad_model_path: String,
 ) {
     if !enabled {
         tracing::info!("Audio capture disabled in config");
@@ -118,7 +120,7 @@ async fn audio_capture_loop(
     #[cfg(not(target_os = "windows"))]
     {
         tracing::info!("Audio capture requires Windows WASAPI — skipping on this platform");
-        let _ = (&pipeline, &audio_active); // suppress unused warnings
+        let _ = (&pipeline, &audio_active, &whisper_model_path, &vad_model_path); // suppress unused warnings
     }
 
     #[cfg(target_os = "windows")]
@@ -141,7 +143,11 @@ async fn audio_capture_loop(
         audio_active.store(true, std::sync::atomic::Ordering::Relaxed);
 
         // Initialize VAD (if model available).
-        let vad = match SileroVad::new(SileroVadConfig::default()) {
+        let vad_config = SileroVadConfig {
+            model_path: vad_model_path,
+            ..SileroVadConfig::default()
+        };
+        let vad = match SileroVad::new(vad_config) {
             Ok(v) => {
                 tracing::info!("Silero VAD initialized");
                 Some(v)
@@ -153,7 +159,11 @@ async fn audio_capture_loop(
         };
 
         // Initialize Whisper (if model available).
-        let whisper = match WhisperService::new(WhisperConfig::default()) {
+        let whisper_config = WhisperConfig {
+            model_path: whisper_model_path,
+            ..WhisperConfig::default()
+        };
+        let whisper = match WhisperService::new(whisper_config) {
             Ok(w) => {
                 tracing::info!("Whisper transcription service initialized");
                 w
@@ -167,16 +177,29 @@ async fn audio_capture_loop(
         let sample_rate = audio_service.config().sample_rate;
         let mut speech_buffer: Vec<f32> = Vec::new();
 
+        tracing::info!(
+            sample_rate,
+            chunk_secs,
+            "Audio processing loop entering — waiting for first tick"
+        );
+
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(chunk_secs));
         loop {
             interval.tick().await;
 
             // Step 1: Drain the audio buffer accumulated since last tick.
+            let buf_len = audio_service.buffer().len();
+            tracing::debug!(buf_len, "Audio tick — draining buffer");
             let samples = audio_service.buffer().take();
             if samples.is_empty() {
                 tracing::debug!("Audio tick — no samples buffered");
                 continue;
             }
+
+            // Compute RMS and peak to verify signal is present.
+            let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+            let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+            tracing::debug!(samples = samples.len(), rms, peak, "Audio tick — processing samples");
 
             // Step 2: Voice Activity Detection.
             let is_speech = if let Some(ref vad) = vad {
@@ -188,6 +211,8 @@ async fn audio_capture_loop(
             } else {
                 true // No VAD available — process everything.
             };
+
+            tracing::debug!(is_speech, speech_buffer_len = speech_buffer.len(), "VAD result");
 
             if is_speech {
                 speech_buffer.extend_from_slice(&samples);
@@ -238,6 +263,7 @@ async fn audio_capture_loop(
                         tracing::warn!(error = %e, "Whisper transcription failed");
                     }
                 }
+
             }
         }
     }
@@ -526,7 +552,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create dictation engine with Whisper transcription if available.
     let dictation_engine = {
         use engram_whisper::{TranscriptionService, WhisperConfig, WhisperService};
-        match WhisperService::new(WhisperConfig::default()) {
+        let dictation_whisper_config = WhisperConfig {
+            model_path: data_dir
+                .join("models")
+                .join(format!("ggml-{}.en.bin", config.audio.whisper_model))
+                .to_string_lossy()
+                .to_string(),
+            ..WhisperConfig::default()
+        };
+        match WhisperService::new(dictation_whisper_config) {
             Ok(whisper) => {
                 let whisper = Arc::new(whisper);
                 let transcription_fn: engram_dictation::TranscriptionFn =
@@ -653,9 +687,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 detected_at: intent.detected_at.0.to_string(),
                                 acted_on: false,
                             };
-                            if let Err(e) = intent_db.with_conn(|conn| {
-                                engram_storage::store_intent(conn, &intent_row)
-                            }) {
+                            if let Err(e) = intent_db
+                                .with_conn(|conn| engram_storage::store_intent(conn, &intent_row))
+                            {
                                 tracing::warn!(error = %e, "Failed to persist intent");
                             }
 
@@ -738,6 +772,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         tracing::info!("Action engine disabled in config");
     }
+
+    // === Chat Interface ===
+    let state = if config.chat.enabled {
+        let chat_config = engram_chat::ChatConfig {
+            enabled: config.chat.enabled,
+            voice_hotkey: config.chat.voice_hotkey.clone(),
+            context_turns: config.chat.context_turns,
+            session_timeout_minutes: config.chat.session_timeout_minutes,
+            max_voice_duration_seconds: config.chat.max_voice_duration_seconds,
+            default_search_days: config.chat.default_search_days,
+            max_results_per_query: config.chat.max_results_per_query,
+            llm: engram_chat::ChatLlmConfig {
+                enabled: config.chat.llm.enabled,
+                model_path: config.chat.llm.model_path.clone(),
+                max_tokens: config.chat.llm.max_tokens,
+                temperature: config.chat.llm.temperature,
+            },
+        };
+        // Wire real backends for search, action, analytics, persistence, and events
+        let chat_backends = engram_chat::ChatBackends {
+            database: Arc::clone(&state.database),
+            fts_search: Arc::clone(&state.fts_search),
+            query_service: Arc::clone(&state.query_service),
+            task_store: Arc::clone(&state.task_store),
+            intent_detector: engram_action::intent::IntentDetector::new(action_config.clone()),
+            event_tx: state.event_tx.clone(),
+        };
+        let chat_orchestrator =
+            Arc::new(engram_chat::ChatOrchestrator::new(chat_config).with_backends(chat_backends));
+        tracing::info!("Chat interface: enabled (with real backends)");
+        state.with_chat(chat_orchestrator)
+    } else {
+        tracing::info!("Chat interface: disabled");
+        state
+    };
 
     // === System Tray ===
     // The tray icon must be created AND its event loop run on the same
@@ -866,21 +935,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(dir = %screenshot_dir.display(), "Screenshot saving enabled");
     }
 
-    tokio::spawn(async move {
-        screen_capture_loop(pipeline_capture, capture_interval, capture_cfg).await;
-    });
+    if config.screen.enabled {
+        tokio::spawn(async move {
+            screen_capture_loop(pipeline_capture, capture_interval, capture_cfg).await;
+        });
+    } else {
+        tracing::info!("Screen capture disabled in config");
+    }
 
     // Audio capture loop.
     let pipeline_audio = Arc::clone(&pipeline);
     let audio_enabled = config.audio.enabled;
     let audio_chunk_secs = config.audio.chunk_duration_secs as u64;
     let audio_active_clone = Arc::clone(&audio_active);
+    let whisper_model_path = data_dir
+        .join("models")
+        .join(format!("ggml-{}.en.bin", config.audio.whisper_model))
+        .to_string_lossy()
+        .to_string();
+    let vad_model_path = data_dir
+        .join("models")
+        .join("silero_vad.onnx")
+        .to_string_lossy()
+        .to_string();
     tokio::spawn(async move {
         audio_capture_loop(
             pipeline_audio,
             audio_enabled,
             audio_chunk_secs,
             audio_active_clone,
+            whisper_model_path,
+            vad_model_path,
         )
         .await;
     });
@@ -1291,6 +1376,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Signal background tasks to stop.
     audio_active.store(false, Ordering::Relaxed);
     tray_stop.store(true, Ordering::Relaxed);
+    tracing::info!("Chat interface shut down");
 
     // Flush and close with a 5-second deadline.
     let cleanup = async {

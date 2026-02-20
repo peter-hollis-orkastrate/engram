@@ -21,6 +21,7 @@ engram-whisper = { path = "../engram-whisper" }
 engram-dictation = { path = "../engram-dictation" }
 engram-insight = { path = "../engram-insight" }
 engram-action = { path = "../engram-action" }
+engram-chat = { path = "../engram-chat" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

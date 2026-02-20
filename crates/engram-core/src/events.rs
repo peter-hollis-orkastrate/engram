@@ -377,6 +377,53 @@ pub enum DomainEvent {
         approved: bool,
         timestamp: Timestamp,
     },
+
+    // =========================================================================
+    // Chat Events
+    // =========================================================================
+    /// A chat query was received from the user.
+    ChatQueryReceived {
+        session_id: Uuid,
+        query_intent: String,
+        raw_query: String,
+        timestamp: Timestamp,
+    },
+
+    /// A chat response was generated.
+    ChatResponseGenerated {
+        session_id: Uuid,
+        source_count: usize,
+        confidence: f32,
+        mode: String,
+        timestamp: Timestamp,
+    },
+
+    /// A voice query recording started.
+    VoiceQueryStarted {
+        session_id: Uuid,
+        timestamp: Timestamp,
+    },
+
+    /// A voice query recording completed and was transcribed.
+    VoiceQueryCompleted {
+        session_id: Uuid,
+        transcription_length: usize,
+        timestamp: Timestamp,
+    },
+
+    /// A new chat session was started.
+    ChatSessionStarted {
+        session_id: Uuid,
+        timestamp: Timestamp,
+    },
+
+    /// A chat session ended (timeout or explicit close).
+    ChatSessionEnded {
+        session_id: Uuid,
+        message_count: u32,
+        duration_secs: u64,
+        timestamp: Timestamp,
+    },
 }
 
 impl DomainEvent {
@@ -427,7 +474,13 @@ impl DomainEvent {
             | DomainEvent::ActionFailed { timestamp, .. }
             | DomainEvent::ReminderTriggered { timestamp, .. }
             | DomainEvent::ConfirmationRequested { timestamp, .. }
-            | DomainEvent::ConfirmationReceived { timestamp, .. } => *timestamp,
+            | DomainEvent::ConfirmationReceived { timestamp, .. }
+            | DomainEvent::ChatQueryReceived { timestamp, .. }
+            | DomainEvent::ChatResponseGenerated { timestamp, .. }
+            | DomainEvent::VoiceQueryStarted { timestamp, .. }
+            | DomainEvent::VoiceQueryCompleted { timestamp, .. }
+            | DomainEvent::ChatSessionStarted { timestamp, .. }
+            | DomainEvent::ChatSessionEnded { timestamp, .. } => *timestamp,
         }
     }
 
@@ -491,6 +544,12 @@ impl DomainEvent {
             DomainEvent::ReminderTriggered { .. } => "reminder_triggered",
             DomainEvent::ConfirmationRequested { .. } => "confirmation_requested",
             DomainEvent::ConfirmationReceived { .. } => "confirmation_received",
+            DomainEvent::ChatQueryReceived { .. } => "chat_query_received",
+            DomainEvent::ChatResponseGenerated { .. } => "chat_response_generated",
+            DomainEvent::VoiceQueryStarted { .. } => "voice_query_started",
+            DomainEvent::VoiceQueryCompleted { .. } => "voice_query_completed",
+            DomainEvent::ChatSessionStarted { .. } => "chat_session_started",
+            DomainEvent::ChatSessionEnded { .. } => "chat_session_ended",
         }
     }
 }
@@ -976,6 +1035,39 @@ mod tests {
                 approved: false,
                 timestamp: ts,
             },
+            // Chat events
+            DomainEvent::ChatQueryReceived {
+                session_id,
+                query_intent: "search".to_string(),
+                raw_query: "what happened".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::ChatResponseGenerated {
+                session_id,
+                source_count: 3,
+                confidence: 0.8,
+                mode: "template".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::VoiceQueryStarted {
+                session_id,
+                timestamp: ts,
+            },
+            DomainEvent::VoiceQueryCompleted {
+                session_id,
+                transcription_length: 50,
+                timestamp: ts,
+            },
+            DomainEvent::ChatSessionStarted {
+                session_id,
+                timestamp: ts,
+            },
+            DomainEvent::ChatSessionEnded {
+                session_id,
+                message_count: 8,
+                duration_secs: 300,
+                timestamp: ts,
+            },
         ];
 
         for event in &events {
@@ -1270,6 +1362,39 @@ mod tests {
             DomainEvent::ConfirmationReceived {
                 task_id: id,
                 approved: true,
+                timestamp: ts,
+            },
+            // Chat events
+            DomainEvent::ChatQueryReceived {
+                session_id,
+                query_intent: "search".to_string(),
+                raw_query: "test".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::ChatResponseGenerated {
+                session_id,
+                source_count: 2,
+                confidence: 0.7,
+                mode: "template".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::VoiceQueryStarted {
+                session_id,
+                timestamp: ts,
+            },
+            DomainEvent::VoiceQueryCompleted {
+                session_id,
+                transcription_length: 20,
+                timestamp: ts,
+            },
+            DomainEvent::ChatSessionStarted {
+                session_id,
+                timestamp: ts,
+            },
+            DomainEvent::ChatSessionEnded {
+                session_id,
+                message_count: 4,
+                duration_secs: 120,
                 timestamp: ts,
             },
         ];
@@ -1815,6 +1940,39 @@ mod tests {
                 approved: true,
                 timestamp: ts,
             },
+            // Chat events
+            DomainEvent::ChatQueryReceived {
+                session_id: sid,
+                query_intent: "s".to_string(),
+                raw_query: "q".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::ChatResponseGenerated {
+                session_id: sid,
+                source_count: 1,
+                confidence: 0.5,
+                mode: "t".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::VoiceQueryStarted {
+                session_id: sid,
+                timestamp: ts,
+            },
+            DomainEvent::VoiceQueryCompleted {
+                session_id: sid,
+                transcription_length: 1,
+                timestamp: ts,
+            },
+            DomainEvent::ChatSessionStarted {
+                session_id: sid,
+                timestamp: ts,
+            },
+            DomainEvent::ChatSessionEnded {
+                session_id: sid,
+                message_count: 1,
+                duration_secs: 1,
+                timestamp: ts,
+            },
         ];
 
         let mut names: Vec<&str> = events.iter().map(|e| e.event_name()).collect();
@@ -1925,6 +2083,222 @@ mod tests {
         };
         let json = event.to_json();
         assert_eq!(json["event"], "reminder_triggered");
+    }
+
+    #[test]
+    fn test_chat_events_to_json() {
+        let ts = Timestamp::now();
+        let sid = Uuid::new_v4();
+
+        let event = DomainEvent::ChatQueryReceived {
+            session_id: sid,
+            query_intent: "search".to_string(),
+            raw_query: "what happened today".to_string(),
+            timestamp: ts,
+        };
+        let json = event.to_json();
+        assert_eq!(json["event"], "chat_query_received");
+        assert_eq!(json["timestamp"], ts.0);
+        assert!(json["data"]["ChatQueryReceived"]["raw_query"]
+            .as_str()
+            .unwrap()
+            .contains("what happened today"));
+
+        let event = DomainEvent::ChatResponseGenerated {
+            session_id: sid,
+            source_count: 5,
+            confidence: 0.85,
+            mode: "extractive".to_string(),
+            timestamp: ts,
+        };
+        let json = event.to_json();
+        assert_eq!(json["event"], "chat_response_generated");
+
+        let event = DomainEvent::ChatSessionStarted {
+            session_id: sid,
+            timestamp: ts,
+        };
+        let json = event.to_json();
+        assert_eq!(json["event"], "chat_session_started");
+
+        let event = DomainEvent::ChatSessionEnded {
+            session_id: sid,
+            message_count: 10,
+            duration_secs: 600,
+            timestamp: ts,
+        };
+        let json = event.to_json();
+        assert_eq!(json["event"], "chat_session_ended");
+
+        let event = DomainEvent::VoiceQueryStarted {
+            session_id: sid,
+            timestamp: ts,
+        };
+        let json = event.to_json();
+        assert_eq!(json["event"], "voice_query_started");
+
+        let event = DomainEvent::VoiceQueryCompleted {
+            session_id: sid,
+            transcription_length: 42,
+            timestamp: ts,
+        };
+        let json = event.to_json();
+        assert_eq!(json["event"], "voice_query_completed");
+    }
+
+    #[test]
+    fn test_chat_events_serde_round_trip_individually() {
+        let ts = Timestamp::now();
+        let sid = Uuid::new_v4();
+
+        // ChatQueryReceived
+        let event = DomainEvent::ChatQueryReceived {
+            session_id: sid,
+            query_intent: "action".to_string(),
+            raw_query: "remind me tomorrow".to_string(),
+            timestamp: ts,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        if let DomainEvent::ChatQueryReceived {
+            session_id,
+            query_intent,
+            raw_query,
+            ..
+        } = &rt
+        {
+            assert_eq!(*session_id, sid);
+            assert_eq!(query_intent, "action");
+            assert_eq!(raw_query, "remind me tomorrow");
+        } else {
+            panic!("Expected ChatQueryReceived");
+        }
+
+        // ChatResponseGenerated
+        let event = DomainEvent::ChatResponseGenerated {
+            session_id: sid,
+            source_count: 0,
+            confidence: 0.0,
+            mode: "extractive".to_string(),
+            timestamp: ts,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        if let DomainEvent::ChatResponseGenerated {
+            source_count,
+            confidence,
+            mode,
+            ..
+        } = &rt
+        {
+            assert_eq!(*source_count, 0);
+            assert!((confidence - 0.0).abs() < f32::EPSILON);
+            assert_eq!(mode, "extractive");
+        } else {
+            panic!("Expected ChatResponseGenerated");
+        }
+
+        // ChatSessionEnded
+        let event = DomainEvent::ChatSessionEnded {
+            session_id: sid,
+            message_count: 0,
+            duration_secs: 0,
+            timestamp: ts,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        if let DomainEvent::ChatSessionEnded {
+            message_count,
+            duration_secs,
+            ..
+        } = &rt
+        {
+            assert_eq!(*message_count, 0);
+            assert_eq!(*duration_secs, 0);
+        } else {
+            panic!("Expected ChatSessionEnded");
+        }
+
+        // VoiceQueryCompleted with zero length
+        let event = DomainEvent::VoiceQueryCompleted {
+            session_id: sid,
+            transcription_length: 0,
+            timestamp: ts,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let rt: DomainEvent = serde_json::from_str(&json).unwrap();
+        if let DomainEvent::VoiceQueryCompleted {
+            transcription_length,
+            ..
+        } = &rt
+        {
+            assert_eq!(*transcription_length, 0);
+        } else {
+            panic!("Expected VoiceQueryCompleted");
+        }
+    }
+
+    #[test]
+    fn test_chat_event_names_individually() {
+        let ts = Timestamp::now();
+        let sid = Uuid::new_v4();
+
+        assert_eq!(
+            DomainEvent::ChatQueryReceived {
+                session_id: sid,
+                query_intent: "search".to_string(),
+                raw_query: "test".to_string(),
+                timestamp: ts,
+            }
+            .event_name(),
+            "chat_query_received"
+        );
+        assert_eq!(
+            DomainEvent::ChatResponseGenerated {
+                session_id: sid,
+                source_count: 1,
+                confidence: 0.5,
+                mode: "template".to_string(),
+                timestamp: ts,
+            }
+            .event_name(),
+            "chat_response_generated"
+        );
+        assert_eq!(
+            DomainEvent::VoiceQueryStarted {
+                session_id: sid,
+                timestamp: ts,
+            }
+            .event_name(),
+            "voice_query_started"
+        );
+        assert_eq!(
+            DomainEvent::VoiceQueryCompleted {
+                session_id: sid,
+                transcription_length: 10,
+                timestamp: ts,
+            }
+            .event_name(),
+            "voice_query_completed"
+        );
+        assert_eq!(
+            DomainEvent::ChatSessionStarted {
+                session_id: sid,
+                timestamp: ts,
+            }
+            .event_name(),
+            "chat_session_started"
+        );
+        assert_eq!(
+            DomainEvent::ChatSessionEnded {
+                session_id: sid,
+                message_count: 5,
+                duration_secs: 300,
+                timestamp: ts,
+            }
+            .event_name(),
+            "chat_session_ended"
+        );
     }
 
     #[test]
@@ -2180,7 +2554,40 @@ mod tests {
                 approved: true,
                 timestamp: ts,
             },
+            // Chat events
+            DomainEvent::ChatQueryReceived {
+                session_id: sid,
+                query_intent: "search".to_string(),
+                raw_query: "what happened today".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::ChatResponseGenerated {
+                session_id: sid,
+                source_count: 5,
+                confidence: 0.85,
+                mode: "template".to_string(),
+                timestamp: ts,
+            },
+            DomainEvent::VoiceQueryStarted {
+                session_id: sid,
+                timestamp: ts,
+            },
+            DomainEvent::VoiceQueryCompleted {
+                session_id: sid,
+                transcription_length: 42,
+                timestamp: ts,
+            },
+            DomainEvent::ChatSessionStarted {
+                session_id: sid,
+                timestamp: ts,
+            },
+            DomainEvent::ChatSessionEnded {
+                session_id: sid,
+                message_count: 10,
+                duration_secs: 600,
+                timestamp: ts,
+            },
         ];
-        assert_eq!(events.len(), 45);
+        assert_eq!(events.len(), 51);
     }
 }

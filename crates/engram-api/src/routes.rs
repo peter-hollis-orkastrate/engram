@@ -5,7 +5,7 @@
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::{header, HeaderValue, Method};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -109,13 +109,23 @@ pub fn create_router(state: AppState) -> Router {
         .route("/intents", get(handlers::list_intents))
         .route("/actions/{task_id}/approve", post(handlers::approve_action))
         .route("/actions/{task_id}/dismiss", post(handlers::dismiss_action))
+        // Chat routes
+        .route("/chat", post(handlers::chat_handler))
+        .route("/chat/history", get(handlers::chat_history_handler))
+        .route("/chat/sessions", get(handlers::chat_sessions_handler))
+        .route(
+            "/chat/sessions/{id}",
+            delete(handlers::chat_session_delete_handler),
+        )
         .layer(axum::middleware::from_fn(
             crate::rate_limit::rate_limit_middleware,
         ))
         .layer(axum::Extension(limiter));
 
-    // SSE stream exempt from rate limiting.
-    let stream_routes = Router::new().route("/stream", get(handlers::stream));
+    // SSE stream and WebSocket routes exempt from rate limiting.
+    let stream_routes = Router::new()
+        .route("/stream", get(handlers::stream))
+        .route("/chat/stream", get(handlers::chat_stream_handler));
 
     // Combine all protected routes behind auth.
     let protected_routes =

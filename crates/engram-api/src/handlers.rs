@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse};
 use axum::Json;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
@@ -1958,6 +1958,155 @@ pub async fn dismiss_action(
         status: dismissed.status.to_string(),
         message: "Action dismissed".to_string(),
     }))
+}
+
+// =============================================================================
+// Chat endpoints
+// =============================================================================
+
+/// Query parameters for chat history.
+#[derive(Debug, Deserialize)]
+pub struct ChatHistoryParams {
+    pub session_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+/// POST /chat - send a chat message.
+pub async fn chat_handler(
+    State(state): State<AppState>,
+    Json(body): Json<engram_chat::ChatRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let chat = state
+        .chat
+        .as_ref()
+        .ok_or_else(|| ApiError::ServiceUnavailable("chat is disabled".to_string()))?;
+
+    let (response, session_id) = chat
+        .handle_message(&body.message, body.session_id)
+        .map_err(|e| match e {
+            engram_chat::ChatError::Disabled => {
+                ApiError::ServiceUnavailable("chat is disabled".to_string())
+            }
+            engram_chat::ChatError::EmptyMessage => {
+                ApiError::BadRequest("message cannot be empty".to_string())
+            }
+            engram_chat::ChatError::MessageTooLong(n) => {
+                ApiError::BadRequest(format!("message exceeds {} characters", n))
+            }
+            _ => ApiError::Internal(e.to_string()),
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "response": {
+            "answer": response.answer,
+            "sources": response.sources,
+            "confidence": response.confidence,
+            "suggestions": response.suggestions,
+        },
+        "session_id": session_id,
+    })))
+}
+
+/// GET /chat/history - get chat history for a session.
+pub async fn chat_history_handler(
+    State(state): State<AppState>,
+    Query(params): Query<ChatHistoryParams>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let chat = state
+        .chat
+        .as_ref()
+        .ok_or_else(|| ApiError::ServiceUnavailable("chat is disabled".to_string()))?;
+
+    let session_id_str = params
+        .session_id
+        .ok_or_else(|| ApiError::BadRequest("session_id is required".to_string()))?;
+
+    let session_id = session_id_str
+        .parse::<Uuid>()
+        .map_err(|_| ApiError::BadRequest("Invalid session_id".to_string()))?;
+
+    let limit = params.limit.unwrap_or(50).min(200);
+
+    let messages = chat.get_history(session_id).map_err(|e| match e {
+        engram_chat::ChatError::SessionNotFound(_) => {
+            ApiError::NotFound(format!("Session {} not found", session_id))
+        }
+        _ => ApiError::Internal(e.to_string()),
+    })?;
+
+    let limited: Vec<_> = messages.into_iter().take(limit).collect();
+
+    let records: Vec<serde_json::Value> = limited
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "role": m.role,
+                "content": m.content,
+                "timestamp": chrono::Local.timestamp_opt(m.created_at, 0)
+                    .single()
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_else(|| m.created_at.to_string()),
+                "sources": m.sources.as_ref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+                "suggestions": m.suggestions.as_ref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "messages": records })))
+}
+
+/// GET /chat/sessions - list all chat sessions.
+pub async fn chat_sessions_handler(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let chat = state
+        .chat
+        .as_ref()
+        .ok_or_else(|| ApiError::ServiceUnavailable("chat is disabled".to_string()))?;
+
+    let sessions = chat.list_sessions();
+    Ok(Json(serde_json::json!({ "sessions": sessions })))
+}
+
+/// DELETE /chat/sessions/:id - delete a chat session.
+pub async fn chat_session_delete_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let chat = state
+        .chat
+        .as_ref()
+        .ok_or_else(|| ApiError::ServiceUnavailable("chat is disabled".to_string()))?;
+
+    let session_id = id
+        .parse::<Uuid>()
+        .map_err(|_| ApiError::BadRequest("Invalid session ID".to_string()))?;
+
+    chat.delete_session(session_id).map_err(|e| match e {
+        engram_chat::ChatError::SessionNotFound(_) => {
+            ApiError::NotFound(format!("Session {} not found", id))
+        }
+        _ => ApiError::Internal(e.to_string()),
+    })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /chat/stream - WebSocket stub for streaming chat.
+pub async fn chat_stream_handler(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Stub: return a message indicating streaming is not yet implemented.
+    // Full WebSocket upgrade will be added in a future phase when LLM mode is active.
+    let _chat = state
+        .chat
+        .as_ref()
+        .ok_or_else(|| ApiError::ServiceUnavailable("chat is disabled".to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "status": "not_implemented",
+        "message": "WebSocket streaming will be available in a future release with LLM mode."
+    })))
 }
 
 #[cfg(test)]

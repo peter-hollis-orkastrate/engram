@@ -56,6 +56,11 @@ pub fn run_migrations(conn: &Connection) -> Result<(), EngramError> {
         info!("Applied migration v5: action_engine_tables");
     }
 
+    if current_version < 6 {
+        apply_v6(conn)?;
+        info!("Applied migration v6: chat_tables");
+    }
+
     Ok(())
 }
 
@@ -409,6 +414,42 @@ fn apply_v5(conn: &Connection) -> Result<(), EngramError> {
     Ok(())
 }
 
+/// Version 6: Chat session and message tables.
+///
+/// Creates tables for conversational interface sessions and messages.
+fn apply_v6(conn: &Connection) -> Result<(), EngramError> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id TEXT PRIMARY KEY,
+            started_at TEXT NOT NULL DEFAULT (datetime('now')),
+            last_message_at TEXT NOT NULL DEFAULT (datetime('now')),
+            context TEXT NOT NULL DEFAULT '{}',
+            message_count INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+            content TEXT NOT NULL,
+            sources TEXT,
+            suggestions TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_sessions_last ON chat_sessions(last_message_at);
+
+        INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (6, 'chat_tables');
+        ",
+    )
+    .map_err(|e| EngramError::Storage(format!("Failed to apply migration v6: {}", e)))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,7 +473,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
     }
 
     #[test]
@@ -1239,7 +1280,7 @@ mod tests {
     }
 
     #[test]
-    fn test_all_five_migrations_applied() {
+    fn test_all_six_migrations_applied() {
         let conn = open_test_conn();
         run_migrations(&conn).unwrap();
 
@@ -1248,9 +1289,9 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 5);
+        assert_eq!(count, 6);
 
-        let versions: Vec<i64> = (1..=5).collect();
+        let versions: Vec<i64> = (1..=6).collect();
         for v in versions {
             let name: String = conn
                 .query_row(
@@ -1261,5 +1302,308 @@ mod tests {
                 .unwrap();
             assert!(!name.is_empty(), "Migration v{} should have a name", v);
         }
+    }
+
+    // =========================================================================
+    // V6: Chat tables
+    // =========================================================================
+
+    #[test]
+    fn test_v6_chat_sessions_table() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO chat_sessions (id, context, message_count) VALUES ('sess-1', '{}', 0)",
+            [],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT message_count FROM chat_sessions WHERE id = 'sess-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_v6_chat_messages_table() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        // Insert session first (FK).
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-msg')", [])
+            .unwrap();
+
+        conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-1', 'sess-msg', 'user', 'Hello')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content, sources, suggestions) VALUES ('msg-2', 'sess-msg', 'assistant', 'Hi there!', '[]', '[\"Tell me more\"]')",
+            [],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_messages WHERE session_id = 'sess-msg'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_v6_chat_messages_role_check() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-role')", [])
+            .unwrap();
+
+        // Valid roles
+        conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-u', 'sess-role', 'user', 'test')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-a', 'sess-role', 'assistant', 'test')",
+            [],
+        )
+        .unwrap();
+
+        // Invalid role should fail
+        let result = conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-bad', 'sess-role', 'system', 'test')",
+            [],
+        );
+        assert!(
+            result.is_err(),
+            "Invalid role should be rejected by CHECK constraint"
+        );
+    }
+
+    #[test]
+    fn test_v6_chat_messages_cascade_delete() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-del')", [])
+            .unwrap();
+
+        conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-del', 'sess-del', 'user', 'bye')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute("DELETE FROM chat_sessions WHERE id = 'sess-del'", [])
+            .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_messages WHERE session_id = 'sess-del'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "Messages should be cascade-deleted with session");
+    }
+
+    #[test]
+    fn test_v6_indexes_exist() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        let index_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN (
+                    'idx_chat_messages_session', 'idx_chat_sessions_last'
+                )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_count, 2);
+    }
+
+    #[test]
+    fn test_v6_migration_version_recorded() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM schema_migrations WHERE version = 6",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "chat_tables");
+    }
+
+    #[test]
+    fn test_v6_chat_sessions_default_context() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-ctx')", [])
+            .unwrap();
+
+        let context: String = conn
+            .query_row(
+                "SELECT context FROM chat_sessions WHERE id = 'sess-ctx'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(context, "{}");
+    }
+
+    #[test]
+    fn test_v6_chat_sessions_default_message_count() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-mc')", [])
+            .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT message_count FROM chat_sessions WHERE id = 'sess-mc'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_v6_chat_messages_null_sources_and_suggestions() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-null')", [])
+            .unwrap();
+
+        conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-null', 'sess-null', 'user', 'hello')",
+            [],
+        )
+        .unwrap();
+
+        let sources: Option<String> = conn
+            .query_row(
+                "SELECT sources FROM chat_messages WHERE id = 'msg-null'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(sources.is_none());
+
+        let suggestions: Option<String> = conn
+            .query_row(
+                "SELECT suggestions FROM chat_messages WHERE id = 'msg-null'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(suggestions.is_none());
+    }
+
+    #[test]
+    fn test_v6_chat_messages_fk_rejects_invalid_session() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        let result = conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-bad-fk', 'nonexistent', 'user', 'test')",
+            [],
+        );
+        assert!(
+            result.is_err(),
+            "FK constraint should reject invalid session_id"
+        );
+    }
+
+    #[test]
+    fn test_v6_chat_sessions_update_message_count() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-upd')", [])
+            .unwrap();
+
+        conn.execute(
+            "UPDATE chat_sessions SET message_count = 5, last_message_at = datetime('now') WHERE id = 'sess-upd'",
+            [],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT message_count FROM chat_sessions WHERE id = 'sess-upd'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn test_v6_chat_messages_multiple_per_session() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-multi')", [])
+            .unwrap();
+
+        for i in 0..10 {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            conn.execute(
+                &format!(
+                    "INSERT INTO chat_messages (id, session_id, role, content) VALUES ('msg-{}', 'sess-multi', '{}', 'message {}')",
+                    i, role, i
+                ),
+                [],
+            )
+            .unwrap();
+        }
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_messages WHERE session_id = 'sess-multi'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 10);
+    }
+
+    #[test]
+    fn test_v6_migration_idempotent() {
+        let conn = open_test_conn();
+        run_migrations(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+
+        conn.execute("INSERT INTO chat_sessions (id) VALUES ('sess-idem')", [])
+            .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_sessions WHERE id = 'sess-idem'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }

@@ -31,6 +31,71 @@ pub struct EngramConfig {
     pub insight: InsightConfig,
     #[serde(default)]
     pub actions: ActionsConfig,
+    #[serde(default)]
+    pub chat: ChatConfig,
+}
+
+/// Conversational interface configuration (loaded from `[chat]` in config.toml).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChatConfig {
+    /// Whether the chat interface is enabled.
+    pub enabled: bool,
+    /// Hotkey to activate voice query.
+    pub voice_hotkey: String,
+    /// Number of recent turns to keep in session context.
+    pub context_turns: usize,
+    /// Session timeout in minutes.
+    pub session_timeout_minutes: u32,
+    /// Maximum voice recording duration in seconds.
+    pub max_voice_duration_seconds: u32,
+    /// Default number of days to search back.
+    pub default_search_days: u32,
+    /// Maximum results per query.
+    pub max_results_per_query: usize,
+    /// LLM configuration.
+    #[serde(default)]
+    pub llm: ChatLlmConfig,
+}
+
+impl Default for ChatConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            voice_hotkey: "Ctrl+Shift+E".to_string(),
+            context_turns: 5,
+            session_timeout_minutes: 30,
+            max_voice_duration_seconds: 30,
+            default_search_days: 7,
+            max_results_per_query: 10,
+            llm: ChatLlmConfig::default(),
+        }
+    }
+}
+
+/// LLM-specific configuration for response generation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChatLlmConfig {
+    /// Whether LLM-based response generation is enabled.
+    pub enabled: bool,
+    /// Path to the local LLM model.
+    pub model_path: String,
+    /// Maximum tokens for generated responses.
+    pub max_tokens: u32,
+    /// Temperature for response generation (0.0 to 1.0).
+    pub temperature: f32,
+}
+
+impl Default for ChatLlmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_path: String::new(),
+            max_tokens: 512,
+            temperature: 0.3,
+        }
+    }
 }
 
 /// Action engine configuration (loaded from `[actions]` in config.toml).
@@ -1350,6 +1415,148 @@ ssn_redaction = true
         assert!(!reloaded.insight.export.export_daily_digest);
         assert!(!reloaded.insight.export.export_summaries);
         assert!(!reloaded.insight.export.export_entities);
+    }
+
+    // =========================================================================
+    // Phase 6 M0: ChatConfig tests
+    // =========================================================================
+
+    #[test]
+    fn test_chat_config_defaults() {
+        let config = ChatConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.voice_hotkey, "Ctrl+Shift+E");
+        assert_eq!(config.context_turns, 5);
+        assert_eq!(config.session_timeout_minutes, 30);
+        assert_eq!(config.max_voice_duration_seconds, 30);
+        assert_eq!(config.default_search_days, 7);
+        assert_eq!(config.max_results_per_query, 10);
+    }
+
+    #[test]
+    fn test_chat_llm_config_defaults() {
+        let config = ChatLlmConfig::default();
+        assert!(!config.enabled);
+        assert!(config.model_path.is_empty());
+        assert_eq!(config.max_tokens, 512);
+        assert!((config.temperature - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_engram_config_has_chat_default() {
+        let config = EngramConfig::default();
+        assert!(config.chat.enabled);
+        assert_eq!(config.chat.context_turns, 5);
+        assert!(!config.chat.llm.enabled);
+    }
+
+    #[test]
+    fn test_chat_config_roundtrip() {
+        let mut config = EngramConfig::default();
+        config.chat.enabled = false;
+        config.chat.voice_hotkey = "Ctrl+Alt+C".to_string();
+        config.chat.context_turns = 10;
+        config.chat.session_timeout_minutes = 60;
+        config.chat.max_voice_duration_seconds = 60;
+        config.chat.default_search_days = 14;
+        config.chat.max_results_per_query = 20;
+        config.chat.llm.enabled = true;
+        config.chat.llm.model_path = "/models/llama.gguf".to_string();
+        config.chat.llm.max_tokens = 1024;
+        config.chat.llm.temperature = 0.7;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        config.save(&path).unwrap();
+
+        let reloaded = EngramConfig::load(&path).unwrap();
+        assert!(!reloaded.chat.enabled);
+        assert_eq!(reloaded.chat.voice_hotkey, "Ctrl+Alt+C");
+        assert_eq!(reloaded.chat.context_turns, 10);
+        assert_eq!(reloaded.chat.session_timeout_minutes, 60);
+        assert_eq!(reloaded.chat.max_voice_duration_seconds, 60);
+        assert_eq!(reloaded.chat.default_search_days, 14);
+        assert_eq!(reloaded.chat.max_results_per_query, 20);
+        assert!(reloaded.chat.llm.enabled);
+        assert_eq!(reloaded.chat.llm.model_path, "/models/llama.gguf");
+        assert_eq!(reloaded.chat.llm.max_tokens, 1024);
+        assert!((reloaded.chat.llm.temperature - 0.7).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_old_config_without_chat_loads_defaults() {
+        let content = r#"
+[general]
+data_dir = "/old/data"
+"#;
+        let file = create_temp_config(content);
+        let config = EngramConfig::load(file.path()).unwrap();
+        assert!(config.chat.enabled);
+        assert_eq!(config.chat.voice_hotkey, "Ctrl+Shift+E");
+        assert_eq!(config.chat.context_turns, 5);
+        assert!(!config.chat.llm.enabled);
+    }
+
+    #[test]
+    fn test_chat_config_partial_only_enabled() {
+        let content = r#"
+[chat]
+enabled = false
+"#;
+        let file = create_temp_config(content);
+        let config = EngramConfig::load(file.path()).unwrap();
+        assert!(!config.chat.enabled);
+        // Rest should be defaults
+        assert_eq!(config.chat.voice_hotkey, "Ctrl+Shift+E");
+        assert_eq!(config.chat.context_turns, 5);
+        assert_eq!(config.chat.session_timeout_minutes, 30);
+        assert!(!config.chat.llm.enabled);
+        assert_eq!(config.chat.llm.max_tokens, 512);
+    }
+
+    #[test]
+    fn test_chat_config_partial_only_llm() {
+        let content = r#"
+[chat.llm]
+enabled = true
+model_path = "/models/test.gguf"
+"#;
+        let file = create_temp_config(content);
+        let config = EngramConfig::load(file.path()).unwrap();
+        // Chat section defaults apply
+        assert!(config.chat.enabled);
+        assert_eq!(config.chat.context_turns, 5);
+        // LLM section partially overridden
+        assert!(config.chat.llm.enabled);
+        assert_eq!(config.chat.llm.model_path, "/models/test.gguf");
+        // LLM defaults for unset fields
+        assert_eq!(config.chat.llm.max_tokens, 512);
+        assert!((config.chat.llm.temperature - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_chat_config_zero_values() {
+        let content = r#"
+[chat]
+context_turns = 0
+session_timeout_minutes = 0
+max_voice_duration_seconds = 0
+default_search_days = 0
+max_results_per_query = 0
+
+[chat.llm]
+max_tokens = 0
+temperature = 0.0
+"#;
+        let file = create_temp_config(content);
+        let config = EngramConfig::load(file.path()).unwrap();
+        assert_eq!(config.chat.context_turns, 0);
+        assert_eq!(config.chat.session_timeout_minutes, 0);
+        assert_eq!(config.chat.max_voice_duration_seconds, 0);
+        assert_eq!(config.chat.default_search_days, 0);
+        assert_eq!(config.chat.max_results_per_query, 0);
+        assert_eq!(config.chat.llm.max_tokens, 0);
+        assert!((config.chat.llm.temperature - 0.0).abs() < f32::EPSILON);
     }
 
     #[test]
